@@ -1,3 +1,4 @@
+"""先行研究のモデルを現行の環境で動かせるようにしたもの"""
 import os
 import numpy as np
 import pandas as pd
