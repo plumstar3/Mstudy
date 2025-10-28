@@ -1,0 +1,9 @@
+# Excel files
+*.xlsx
+*.csv
+
+# Database files
+*.db
+*.sqlite
+
+*.npz
