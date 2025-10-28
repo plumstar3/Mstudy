@@ -7,3 +7,7 @@
 *.sqlite
 
 *.npz
+
+*.png
+
+*.html
