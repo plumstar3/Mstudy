@@ -29,7 +29,7 @@ if _PROJECT_ROOT not in sys.path:
 from src.utils import amd_tools as amd
 
 # テストモード: True の場合はユニーク地点リストの最初の1件のみ処理
-TEST_MODE = True
+TEST_MODE = False
 
 # データベース/出力ファイル名（プロジェクトルートからの絶対パス）
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
