@@ -49,7 +49,7 @@ GROUP_B = [
 ]
 
 # GPU オプション: True にすると cupy を使って配列操作を試みます（cupy 未導入時はフォールバック）
-USE_GPU = False
+USE_GPU = True
 GPU_AVAILABLE = False
 try:
     if USE_GPU:
