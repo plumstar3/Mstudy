@@ -19,13 +19,14 @@ from datetime import date
 import pandas as pd
 import numpy as np
 from typing import List
+import concurrent.futures
 
 # Ensure project root is on sys.path so `PythonWorks` package can be imported
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from PythonWorks import AMD_Tools4 as amd
 
 # テストモード: True の場合はユニーク地点リストの最初の1件のみ処理
-TEST_MODE = False
+TEST_MODE = True
 
 # データベース/出力ファイル名
 FIELD_DB = "Data/Input/FieldData.db"
@@ -46,6 +47,17 @@ GROUP_A = [
 GROUP_B = [
     "APCPRA", "DLR", "RH", "WIND"
 ]
+
+# GPU オプション: True にすると cupy を使って配列操作を試みます（cupy 未導入時はフォールバック）
+USE_GPU = False
+GPU_AVAILABLE = False
+try:
+    if USE_GPU:
+        import cupy as cp
+        GPU_AVAILABLE = True
+except Exception:
+    GPU_AVAILABLE = False
+
 
 
 def read_unique_places(field_db: str) -> pd.DataFrame:
@@ -84,11 +96,19 @@ def safe_get_metdata(code: str, itsu: List[str], doko: List[float]):
                 except Exception:
                     return pd.DataFrame()
                 arr = np.asarray(data)
-                # 期待形状: (ntime,) または (ntime,1,1) など -> squeeze して1次元に
+                # GPU が使える場合は cupy で squeeze 等を試みる（cuPy が無い場合は numpy を使用）
                 try:
-                    arr = np.squeeze(arr)
+                    if GPU_AVAILABLE:
+                        arr_cp = cp.asarray(arr)
+                        arr_cp = cp.squeeze(arr_cp)
+                        arr = cp.asnumpy(arr_cp)
+                    else:
+                        arr = np.squeeze(arr)
                 except Exception:
-                    pass
+                    try:
+                        arr = np.squeeze(arr)
+                    except Exception:
+                        pass
                 if arr.ndim == 0:
                     # スカラー
                     series = pd.Series([arr] * len(dates), index=dates, name=code)
@@ -136,23 +156,32 @@ def safe_get_metdata(code: str, itsu: List[str], doko: List[float]):
 
 
 def fetch_group(dcodes: List[str], start: str, end: str, doko: List[float]) -> pd.DataFrame:
-    """指定した要素群を順に取得して横方向に結合（index=日付）。"""
-    dfs = []
+    """指定した要素群を並列に取得して横方向に結合（index=日付）。"""
     itsu = [start, end]
-    for code in dcodes:
-        print(f"  -> fetching {code} ({start} to {end})")
-        dfc = safe_get_metdata(code, itsu, doko)
-        if dfc.empty:
-            # 空データでも欠損列として扱う（インデックスなし）
-            # 代わりに終端日だけの空データ作成はやめ、結合時に outer を使う
-            print(f"    (no data) {code}")
-            continue
-        # 列名が複数あれば既存名を保持する
-        dfs.append(dfc)
-    if not dfs:
+    results = {}
+    max_workers = min(6, len(dcodes)) if len(dcodes) > 0 else 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        future_to_code = {}
+        for code in dcodes:
+            print(f"  -> fetching {code} ({start} to {end})")
+            future = ex.submit(safe_get_metdata, code, itsu, doko)
+            future_to_code[future] = code
+        for fut in concurrent.futures.as_completed(future_to_code):
+            code = future_to_code[fut]
+            try:
+                dfc = fut.result()
+            except Exception as e:
+                print(f"  Exception fetching {code}: {e}")
+                dfc = pd.DataFrame()
+            if dfc.empty:
+                print(f"    (no data) {code}")
+            else:
+                results[code] = dfc
+
+    if not results:
         return pd.DataFrame()
-    # 外部結合ではなく列方向に同じインデックスで連結するため、index union を作成して reindex
-    base = pd.concat(dfs, axis=1)
+    # 結果を列方向に連結
+    base = pd.concat([results[c] for c in results], axis=1)
     base = base.sort_index()
     return base
 
