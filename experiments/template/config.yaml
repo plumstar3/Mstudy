@@ -1,0 +1,29 @@
+# 実験設定ファイル
+# experiments/template/config.yaml
+
+run_name: "exp_template"
+
+# データ設定
+data:
+  db_path: "../../data/raw/weather_database.db"
+  processed_csv: "../../data/processed/all_locations_weather_longterm.csv"
+
+# モデル設定
+model:
+  type: "CRNN"           # 使用するモデル名
+  lstm_units: 64
+  conv_filters: 32
+  dropout_rate: 0.2
+
+# 学習設定
+hyperparams:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  validation_split: 0.2
+  early_stopping_patience: 10
+
+# 出力設定
+output:
+  model_dir: "../../outputs/models"
+  predictions_dir: "../../outputs/predictions"

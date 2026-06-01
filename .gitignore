@@ -1,51 +1,52 @@
-# Excel files
-*.xlsx
-*.csv
+# ============================================================
+# Git 管理対象: ソースコードのみ
+# ============================================================
 
-# Database files
+# ---- 仮想環境 ----
+amd/
+venv/
+.venv/
+
+# ---- 大容量データ・モデル（完全除外） ----
+data/
+outputs/
 *.db
 *.sqlite
-
+*.keras
+*.h5
+*.hdf5
 *.npz
+*.csv
+*.xlsx
 
-*.png
+# ---- MLflow 実験ログ ----
+mlruns/
+mlartifacts/
 
-*.html
-
-
-# Virtual environment
-amd/
-
-# Python bytecode
+# ---- Python キャッシュ ----
 __pycache__/
 *.py[cod]
 *.pyo
 
-# Trained models
-*.keras
-*.h5
-*.hdf5
-
-# Prediction results / binary data
-*.npz
-prediction_result*.npz
-
-# Output / build
-Output/
-build/
-dist/
-*.egg-info/
-
-# Jupyter
+# ---- Jupyter ----
 .ipynb_checkpoints/
 
-# IDE / OS
-.vscode/
+# ---- 画像・HTML（出力物） ----
+*.png
+*.html
+
+# ---- IDE / OS ----
+.vscode/settings.json
 .idea/
 .DS_Store
 Thumbs.db
 
-# Logs / temp
+# ---- ビルド ----
+build/
+dist/
+*.egg-info/
+
+# ---- ログ / 一時ファイル ----
 *.log
 tmp/
 temp/
