@@ -8,8 +8,9 @@ venv/
 .venv/
 
 # ---- 大容量データ・モデル（完全除外） ----
-data/
-outputs/
+# 先頭の / でルート直下の data/, outputs/ のみ除外（src/data/ は除外しない）
+/data/
+/outputs/
 *.db
 *.sqlite
 *.keras
