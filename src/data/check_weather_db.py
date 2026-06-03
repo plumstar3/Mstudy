@@ -61,7 +61,7 @@ print(f"カラム名   : {col_names}")
 # ── 2. 地点カバレッジ ────────────────────────────────────────
 section("2. 地点カバレッジ")
 
-# FieldData.db から期待地点数を取得
+# FieldData.db から期待 (place, lat, lon) 組み合わせ数を取得
 if os.path.exists(FIELD_DB):
     conn_f = sqlite3.connect(FIELD_DB)
     places_expected = pd.read_sql(
@@ -69,24 +69,36 @@ if os.path.exists(FIELD_DB):
         conn_f
     )
     conn_f.close()
-    n_expected = len(places_expected)
+    n_expected_latlons = len(places_expected)           # ユニークな (place, lat, lon) 数
+    n_expected_places  = places_expected["place"].nunique()  # ユニークな place 名の数
 else:
-    n_expected = None
+    n_expected_latlons = None
+    n_expected_places  = None
     print("FieldData.db が見つかりません（期待地点数不明）")
 
-places_actual = pd.read_sql("SELECT DISTINCT place FROM weather_data", conn_w)
-n_actual = len(places_actual)
+# weather_data 側の (place, lat, lon) ユニーク数・place名ユニーク数
+actual_latlons = pd.read_sql(
+    "SELECT DISTINCT place, lat, lon FROM weather_data", conn_w
+)
+n_actual_latlons = len(actual_latlons)              # ユニークな (place, lat, lon) 数
+n_actual_places  = actual_latlons["place"].nunique() # ユニークな place 名の数
 
-print(f"期待地点数 (FieldData.db): {n_expected}")
-print(f"実際の地点数 (weather_db): {n_actual}")
-if n_expected:
-    coverage = n_actual / n_expected * 100
-    print(f"地点カバレッジ           : {coverage:.1f}%")
-    if n_expected and n_actual < n_expected:
-        missing_places = set(places_expected["place"]) - set(places_actual["place"])
-        print(f"未取得の地点 ({len(missing_places)}件):")
-        for p in sorted(missing_places):
+print(f"[FieldData.db]  ユニーク place 名              : {n_expected_places}")
+print(f"[FieldData.db]  ユニーク (place, lat, lon) 数  : {n_expected_latlons}")
+print(f"[weather_db]    ユニーク place 名              : {n_actual_places}")
+print(f"[weather_db]    ユニーク (place, lat, lon) 数  : {n_actual_latlons}")
+
+if n_expected_latlons:
+    coverage = n_actual_latlons / n_expected_latlons * 100
+    print(f"地点カバレッジ (place+latlon 単位): {coverage:.1f}%")
+    missing = set(places_expected.apply(lambda r: (r['place'], r['lat'], r['lon']), axis=1)) \
+            - set(actual_latlons.apply(lambda r: (r['place'], r['lat'], r['lon']), axis=1))
+    if missing:
+        print(f"未取得の (place, lat, lon) ({len(missing)}件):")
+        for p in sorted(missing):
             print(f"  - {p}")
+    else:
+        print("未取得の地点: 0件 (全件取得済み)")
 
 
 # ── 3. 期間カバレッジ (地点ごと) ─────────────────────────────
@@ -153,10 +165,14 @@ section("6. 期待行数チェック")
 print(f"期待日数 (グループA, {START_A.date()}〜{END_DATE.date()}): {EXPECTED_DAYS_A:,} 日")
 print(f"期待日数 (グループB, {START_B.date()}〜{END_DATE.date()}): {EXPECTED_DAYS_B:,} 日")
 print(f"実際の総行数 (全地点合計)               : {n_rows:,}")
-if n_actual > 0:
-    avg_rows_per_place = n_rows / n_actual
-    print(f"地点あたり平均行数                     : {avg_rows_per_place:,.0f}")
-    print(f"グループA との差 (地点あたり)           : {avg_rows_per_place - EXPECTED_DAYS_A:+,.0f} 日")
+if n_actual_latlons > 0:
+    avg_rows_per_latlon = n_rows / n_actual_latlons
+    print(f"(place, lat, lon) あたり平均行数       : {avg_rows_per_latlon:,.0f}")
+    print(f"グループA との差 ((place,lat,lon)あたり): {avg_rows_per_latlon - EXPECTED_DAYS_A:+,.0f} 日")
+    # 期待総行数 = (place,lat,lon)数 × グループA日数（グループBはNULL）
+    expected_total = n_actual_latlons * EXPECTED_DAYS_A
+    print(f"期待総行数 ({n_actual_latlons} locations × {EXPECTED_DAYS_A:,}日): {expected_total:,}")
+    print(f"実際との差                             : {n_rows - expected_total:+,}")
 
 
 # ── 終了 ─────────────────────────────────────────────────────
