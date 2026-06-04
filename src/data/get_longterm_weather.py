@@ -8,9 +8,15 @@
 依存: PythonWorks.AMD_Tools4 の GetMetData を利用
 
 FieldData.db は読み込み専用で使用し、既存DBへ変更は加えません。
-出力は新規SQLiteファイル `weather_database.db` と CSV `all_locations_weather_longterm.csv` に保存します。
+出力先はデフォルトで data/processed/ 以下に保存されます（data/raw/ は上書きしません）。
+  - TEST_MODE=True  : weather_database_test.db / all_locations_weather_longterm_test.csv
+  - TEST_MODE=False : weather_database.db      / all_locations_weather_longterm.csv
+
+コマンドライン引数で出力先を明示的に指定することもできます:
+  python get_longterm_weather.py --out-db path/to/output.db --out-csv path/to/output.csv
 """
 from __future__ import annotations
+import argparse
 import os
 import sys
 import sqlite3
@@ -34,8 +40,12 @@ TEST_MODE = False
 # データベース/出力ファイル名（プロジェクトルートからの絶対パス）
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 FIELD_DB = os.path.join(_ROOT, "data", "raw", "FieldData.db")
-OUT_CSV  = os.path.join(_ROOT, "data", "processed", "all_locations_weather_longterm.csv")
-OUT_DB   = os.path.join(_ROOT, "data", "raw", "weather_database.db")
+
+# 出力先は data/processed/ に保存（data/raw/weather_database.db を上書きしない）
+# TEST_MODE に応じてファイル名にサフィックスを付与
+_suffix = "_test" if TEST_MODE else ""
+OUT_CSV  = os.path.join(_ROOT, "data", "processed", f"all_locations_weather_longterm{_suffix}.csv")
+OUT_DB   = os.path.join(_ROOT, "data", "processed", f"weather_database{_suffix}.db")
 
 # 期間の定義
 START_A = "1981-01-01"  # グループA 開始
@@ -255,6 +265,9 @@ def save_outputs(df: pd.DataFrame, csv_path: str, db_path: str):
     if df.empty:
         print("No data to save.")
         return
+    # 出力ディレクトリが存在しない場合は作成
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
     print(f"Saving CSV to {csv_path}")
     df.to_csv(csv_path, index=False)
     print(f"Saving SQLite DB to {db_path} (table: weather_data)")
@@ -264,12 +277,28 @@ def save_outputs(df: pd.DataFrame, csv_path: str, db_path: str):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="長期気象データ一括取得")
+    parser.add_argument(
+        "--out-db",
+        default=OUT_DB,
+        help=f"出力先 SQLite DBファイルのパス (デフォルト: {OUT_DB})",
+    )
+    parser.add_argument(
+        "--out-csv",
+        default=OUT_CSV,
+        help=f"出力先 CSVファイルのパス (デフォルト: {OUT_CSV})",
+    )
+    args = parser.parse_args()
+
     print(f"Longterm weather fetch: END_DATE={END_DATE} TEST_MODE={TEST_MODE}")
+    print(f"  OUT_DB  = {args.out_db}")
+    print(f"  OUT_CSV = {args.out_csv}")
+
     all_df = process_all_places(FIELD_DB, test_mode=TEST_MODE)
     if all_df.empty:
         print("No weather data was fetched.")
         return
-    save_outputs(all_df, OUT_CSV, OUT_DB)
+    save_outputs(all_df, args.out_csv, args.out_db)
     print("Done.")
 
 
