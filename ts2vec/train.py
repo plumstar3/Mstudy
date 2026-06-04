@@ -26,7 +26,7 @@ if __name__ == '__main__':
     parser.add_argument('dataset', help='The dataset name')
     parser.add_argument('run_name', help='The folder name used to save model, output and evaluation metrics. This can be set to any word')
     parser.add_argument('--loader', type=str, required=True, help='The data loader used to load the experimental data. This can be set to UCR, UEA, forecast_csv, forecast_csv_univar, anomaly, or anomaly_coldstart')
-    parser.add_argument('--gpu', type=int, default=0, help='The gpu no. used for training and inference (defaults to 0)')
+    parser.add_argument('--gpu', type=str, default='0', help='The gpu no. used for training and inference (defaults to 0), or "cpu" to use CPU')
     parser.add_argument('--batch-size', type=int, default=8, help='The batch size (defaults to 8)')
     parser.add_argument('--lr', type=float, default=0.001, help='The learning rate (defaults to 0.001)')
     parser.add_argument('--repr-dims', type=int, default=320, help='The representation dimension (defaults to 320)')
@@ -43,7 +43,8 @@ if __name__ == '__main__':
     print("Dataset:", args.dataset)
     print("Arguments:", str(args))
     
-    device = init_dl_program(args.gpu, seed=args.seed, max_threads=args.max_threads)
+    gpu_arg = args.gpu if args.gpu == 'cpu' else int(args.gpu)
+    device = init_dl_program(gpu_arg, seed=args.seed, max_threads=args.max_threads)
     
     print('Loading data... ', end='')
     if args.loader == 'UCR':
