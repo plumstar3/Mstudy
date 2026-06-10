@@ -39,6 +39,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval', action="store_true", help='Whether to perform evaluation after training')
     parser.add_argument('--irregular', type=float, default=0, help='The ratio of missing observations (defaults to 0)')
     parser.add_argument('--pretrained-model', type=str, default=None, help='Path to a pretrained TS2Vec model (.pkl) to load before training (used with soybean_finetune loader)')
+    parser.add_argument('--freeze-encoder', action='store_true', help='When set, skip TS2Vec encoder training and use pretrained model as-is for encoding only (recommended with soybean_finetune when pretrained-model is specified)')
     args = parser.parse_args()
     
     print("Dataset:", args.dataset)
@@ -136,12 +137,17 @@ if __name__ == '__main__':
         print(f'Loading pretrained model from: {args.pretrained_model}')
         model.load(args.pretrained_model)
 
-    loss_log = model.fit(
-        train_data,
-        n_epochs=args.epochs,
-        n_iters=args.iters,
-        verbose=True
-    )
+    # --freeze-encoder が指定された場合はエンコーダ学習をスキップ
+    if args.freeze_encoder:
+        print('Encoder is frozen. Skipping model.fit() and using pretrained weights as-is.')
+        loss_log = []
+    else:
+        loss_log = model.fit(
+            train_data,
+            n_epochs=args.epochs,
+            n_iters=args.iters,
+            verbose=True
+        )
     model.save(f'{run_dir}/model.pkl')
 
     t = time.time() - t
@@ -165,7 +171,8 @@ if __name__ == '__main__':
                 model,
                 train_data, train_labels,
                 val_data,   val_labels,
-                test_data,  test_labels
+                test_data,  test_labels,
+                combine_train_val=args.freeze_encoder  # 固定時はTrain+ValでRidge学習
             )
             m = eval_res['metrics']
             print(f"\n=== Yield Regression Results ===")
