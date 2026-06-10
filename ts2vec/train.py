@@ -23,9 +23,9 @@ def save_checkpoint_callback(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('dataset', help='The dataset name')
+    parser.add_argument('dataset', help='The dataset name or path to the soybean dataset directory')
     parser.add_argument('run_name', help='The folder name used to save model, output and evaluation metrics. This can be set to any word')
-    parser.add_argument('--loader', type=str, required=True, help='The data loader used to load the experimental data. This can be set to UCR, UEA, forecast_csv, forecast_csv_univar, anomaly, or anomaly_coldstart')
+    parser.add_argument('--loader', type=str, required=True, help='The data loader used to load the experimental data. This can be set to UCR, UEA, forecast_csv, forecast_csv_univar, anomaly, anomaly_coldstart, soybean_pretrain, or soybean_finetune')
     parser.add_argument('--gpu', type=str, default='0', help='The gpu no. used for training and inference (defaults to 0), or "cpu" to use CPU')
     parser.add_argument('--batch-size', type=int, default=8, help='The batch size (defaults to 8)')
     parser.add_argument('--lr', type=float, default=0.001, help='The learning rate (defaults to 0.001)')
@@ -38,6 +38,7 @@ if __name__ == '__main__':
     parser.add_argument('--max-threads', type=int, default=None, help='The maximum allowed number of threads used by this process')
     parser.add_argument('--eval', action="store_true", help='Whether to perform evaluation after training')
     parser.add_argument('--irregular', type=float, default=0, help='The ratio of missing observations (defaults to 0)')
+    parser.add_argument('--pretrained-model', type=str, default=None, help='Path to a pretrained TS2Vec model (.pkl) to load before training (used with soybean_finetune loader)')
     args = parser.parse_args()
     
     print("Dataset:", args.dataset)
@@ -84,7 +85,18 @@ if __name__ == '__main__':
         task_type = 'anomaly_detection_coldstart'
         all_train_data, all_train_labels, all_train_timestamps, all_test_data, all_test_labels, all_test_timestamps, delay = datautils.load_anomaly(args.dataset)
         train_data, _, _, _ = datautils.load_UCR('FordA')
-        
+
+    elif args.loader == 'soybean_pretrain':
+        task_type = 'soybean_pretrain'
+        # pretrain_X.npy を読み込み、TS2Vec の自己教師あり学習に使用
+        train_data = datautils.load_soybean_pretrain(args.dataset)  # (N, T, 9)
+
+    elif args.loader == 'soybean_finetune':
+        task_type = 'soybean_finetune'
+        # X.npy + y.npy を年度別分割でロード（train:2015-2016, val:2017, test:2018）
+        train_data, train_labels, val_data, val_labels, test_data, test_labels = \
+            datautils.load_soybean_finetune(args.dataset)
+
     else:
         raise ValueError(f"Unknown loader {args.loader}.")
         
@@ -108,16 +120,22 @@ if __name__ == '__main__':
         unit = 'epoch' if args.epochs is not None else 'iter'
         config[f'after_{unit}_callback'] = save_checkpoint_callback(args.save_every, unit)
 
-    run_dir = 'training/' + args.dataset + '__' + name_with_datetime(args.run_name)
+    run_dir = 'training/' + args.run_name + '__' + name_with_datetime(args.run_name)
     os.makedirs(run_dir, exist_ok=True)
-    
+
     t = time.time()
-    
+
     model = TS2Vec(
         input_dims=train_data.shape[-1],
         device=device,
         **config
     )
+
+    # 事前学習済みモデルが指定されていればウェイトをロード（soybean_finetune 用）
+    if args.pretrained_model is not None:
+        print(f'Loading pretrained model from: {args.pretrained_model}')
+        model.load(args.pretrained_model)
+
     loss_log = model.fit(
         train_data,
         n_epochs=args.epochs,
@@ -138,10 +156,29 @@ if __name__ == '__main__':
             out, eval_res = tasks.eval_anomaly_detection(model, all_train_data, all_train_labels, all_train_timestamps, all_test_data, all_test_labels, all_test_timestamps, delay)
         elif task_type == 'anomaly_detection_coldstart':
             out, eval_res = tasks.eval_anomaly_detection_coldstart(model, all_train_data, all_train_labels, all_train_timestamps, all_test_data, all_test_labels, all_test_timestamps, delay)
+        elif task_type == 'soybean_pretrain':
+            # 事前学習のみ → 評価なし（モデル保存で完了）
+            print('Pre-training complete. Model saved. No downstream evaluation in pretrain mode.')
+            out, eval_res = None, None
+        elif task_type == 'soybean_finetune':
+            out, eval_res = tasks.eval_yield_regression(
+                model,
+                train_data, train_labels,
+                val_data,   val_labels,
+                test_data,  test_labels
+            )
+            m = eval_res['metrics']
+            print(f"\n=== Yield Regression Results ===")
+            print(f"  Train │ RMSE={m['train']['RMSE']:.2f}  MAE={m['train']['MAE']:.2f}  R²={m['train']['R2']:.4f}")
+            print(f"  Val   │ RMSE={m['val']['RMSE']:.2f}  MAE={m['val']['MAE']:.2f}  R²={m['val']['R2']:.4f}")
+            print(f"  Test  │ RMSE={m['test']['RMSE']:.2f}  MAE={m['test']['MAE']:.2f}  R²={m['test']['R2']:.4f}")
+            print(f"  Best Ridge alpha: {eval_res['best_ridge_alpha']}")
         else:
             assert False
-        pkl_save(f'{run_dir}/out.pkl', out)
-        pkl_save(f'{run_dir}/eval_res.pkl', eval_res)
-        print('Evaluation result:', eval_res)
+        if out is not None:
+            pkl_save(f'{run_dir}/out.pkl', out)
+        if eval_res is not None:
+            pkl_save(f'{run_dir}/eval_res.pkl', eval_res)
+            print('Evaluation result:', eval_res)
 
     print("Finished.")
