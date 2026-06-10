@@ -196,3 +196,57 @@ def gen_ano_train_data(all_train_data):
         pretrain_data.append(train_data)
     pretrain_data = np.expand_dims(np.stack(pretrain_data), 2)
     return pretrain_data
+
+
+def load_soybean_pretrain(dataset_dir):
+    '''Load the soybean pre-training dataset (weather time series only, no labels).
+
+    Args:
+        dataset_dir (str): Path to the directory containing pretrain_X.npy.
+
+    Returns:
+        pretrain_data (numpy.ndarray): shape (N, T, 9). N=23218, T=366, features=9.
+    '''
+    pretrain_data = np.load(os.path.join(dataset_dir, 'pretrain_X.npy'))  # (N, T, 9)
+    return pretrain_data
+
+
+def load_soybean_finetune(dataset_dir, train_years=(2015, 2016), val_years=(2017,), test_years=(2018,)):
+    '''Load the soybean fine-tuning dataset with a temporal year-based split.
+
+    The TS2Vec encoder is (self-supervised) trained on train data.
+    Val data is used for Ridge alpha selection.
+    Test data is used for final evaluation only.
+
+    Args:
+        dataset_dir (str): Path to the directory containing X.npy, y.npy, meta.csv.
+        train_years (tuple): Years used for training.
+        val_years (tuple): Years used for validation.
+        test_years (tuple): Years used for testing.
+
+    Returns:
+        train_data   (numpy.ndarray): shape (N_train, T, 9)
+        train_labels (numpy.ndarray): shape (N_train,)  yield values
+        val_data     (numpy.ndarray): shape (N_val, T, 9)
+        val_labels   (numpy.ndarray): shape (N_val,)
+        test_data    (numpy.ndarray): shape (N_test, T, 9)
+        test_labels  (numpy.ndarray): shape (N_test,)
+    '''
+    X    = np.load(os.path.join(dataset_dir, 'X.npy'))           # (603, 366, 9)
+    y    = np.load(os.path.join(dataset_dir, 'y.npy'))           # (603,)
+    meta = pd.read_csv(os.path.join(dataset_dir, 'meta.csv'))    # field_id, year, yield
+
+    years = meta['year'].to_numpy()
+
+    train_mask = np.isin(years, list(train_years))
+    val_mask   = np.isin(years, list(val_years))
+    test_mask  = np.isin(years, list(test_years))
+
+    train_data   = X[train_mask]
+    train_labels = y[train_mask]
+    val_data     = X[val_mask]
+    val_labels   = y[val_mask]
+    test_data    = X[test_mask]
+    test_labels  = y[test_mask]
+
+    return train_data, train_labels, val_data, val_labels, test_data, test_labels
