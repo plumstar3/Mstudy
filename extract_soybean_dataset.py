@@ -12,10 +12,13 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+# スクリプトファイルの場所を起点にパスを解決
+_BASE = Path(__file__).resolve().parent
+
 # ─── パス設定 ────────────────────────────────────────────────
-FIELD_DB   = r'c:\Users\amilu\Projects\vsCodeFile\Mstudy\data\processed\FieldData_fieldid.db'
-WEATHER_DB = r'c:\Users\amilu\Projects\vsCodeFile\Mstudy\data\processed\weather_database_fieldid.db'
-OUT_DIR    = Path(r'c:\Users\amilu\Projects\vsCodeFile\Mstudy\data\processed\soybean_ts2vec')
+FIELD_DB   = _BASE / 'data' / 'processed' / 'FieldData_fieldid.db'
+WEATHER_DB = _BASE / 'data' / 'processed' / 'weather_database_fieldid.db'
+OUT_DIR    = _BASE / 'data' / 'processed' / 'soybean_ts2vec'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # 気象特徴量カラム（1981年から存在するもの）

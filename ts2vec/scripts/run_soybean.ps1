@@ -6,7 +6,8 @@
 #   cd c:\Users\amilu\Projects\vsCodeFile\Mstudy\ts2vec
 #   .\scripts\run_soybean.ps1
 
-$DATASET_DIR = "..\data\processed\soybean_ts2vec"
+$DATASET_DIR = Join-Path $PSScriptRoot "..\..\data\processed\soybean_ts2vec"
+$PYTHON      = Join-Path $PSScriptRoot "..\venv_ts2vec\Scripts\python.exe"  # venv の Python
 $GPU         = "cpu"     # GPU使用時は "0" に変更（例: RTX搭載PCなら "0"）
 $REPR_DIMS   = 320
 $BATCH_SIZE  = 16
@@ -17,7 +18,7 @@ $BATCH_SIZE  = 16
 # ──────────────────────────────────────────────────────────────
 Write-Host "=== Stage 1: Pre-training ===" -ForegroundColor Cyan
 
-python train.py "$DATASET_DIR" soybean_pretrain `
+& $PYTHON train.py "$DATASET_DIR" soybean_pretrain `
     --loader      soybean_pretrain `
     --gpu         $GPU `
     --batch-size  $BATCH_SIZE `
@@ -46,7 +47,7 @@ Write-Host "Pretrained model: $PRETRAINED_MODEL" -ForegroundColor Green
 Write-Host ""
 Write-Host "=== Stage 2: Fine-tuning & Evaluation ===" -ForegroundColor Cyan
 
-python train.py "$DATASET_DIR" soybean_finetune `
+& $PYTHON train.py "$DATASET_DIR" soybean_finetune `
     --loader           soybean_finetune `
     --gpu              $GPU `
     --batch-size       $BATCH_SIZE `

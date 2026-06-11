@@ -171,8 +171,7 @@ if __name__ == '__main__':
                 model,
                 train_data, train_labels,
                 val_data,   val_labels,
-                test_data,  test_labels,
-                combine_train_val=args.freeze_encoder  # 固定時はTrain+ValでRidge学習
+                test_data,  test_labels
             )
             m = eval_res['metrics']
             print(f"\n=== Yield Regression Results ===")

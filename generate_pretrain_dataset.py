@@ -12,8 +12,11 @@ import pandas as pd
 from pathlib import Path
 import time
 
-WEATHER_DB   = r'c:\Users\amilu\Projects\vsCodeFile\Mstudy\data\processed\weather_database_fieldid.db'
-OUT_DIR      = Path(r'c:\Users\amilu\Projects\vsCodeFile\Mstudy\data\processed\soybean_ts2vec')
+# スクリプトファイルの場所を起点にパスを解決
+_BASE = Path(__file__).resolve().parent
+
+WEATHER_DB   = _BASE / 'data' / 'processed' / 'weather_database_fieldid.db'
+OUT_DIR      = _BASE / 'data' / 'processed' / 'soybean_ts2vec'
 WEATHER_COLS = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCP', 'SSD', 'GSR', 'SD', 'SWE', 'SFW']
 YEAR_START   = 1981
 YEAR_END     = 2018

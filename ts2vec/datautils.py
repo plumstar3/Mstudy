@@ -198,8 +198,38 @@ def gen_ano_train_data(all_train_data):
     return pretrain_data
 
 
+def _normalize_soybean(X, mean=None, std=None):
+    '''Normalize soybean weather data per feature (NaN-aware).
+
+    Args:
+        X (numpy.ndarray): shape (N, T, F) or (T, F) — raw weather data.
+        mean (numpy.ndarray or None): shape (F,). If None, computed from X.
+        std  (numpy.ndarray or None): shape (F,). If None, computed from X.
+
+    Returns:
+        X_norm (numpy.ndarray): Normalized data. NaN positions are filled with 0.
+        mean   (numpy.ndarray): Per-feature mean used for normalization.
+        std    (numpy.ndarray): Per-feature std used for normalization.
+    '''
+    orig_shape = X.shape
+    X_2d = X.reshape(-1, X.shape[-1])  # (N*T, F)
+
+    if mean is None:
+        mean = np.nanmean(X_2d, axis=0)
+    if std is None:
+        std = np.nanstd(X_2d, axis=0)
+        std[std < 1e-8] = 1.0  # ゼロ除算防止
+
+    X_norm = (X_2d - mean) / std
+    X_norm = np.nan_to_num(X_norm, nan=0.0)  # NaN → 0（正規化後は「平均値」に相当）
+    return X_norm.reshape(orig_shape).astype(np.float32), mean, std
+
+
 def load_soybean_pretrain(dataset_dir):
     '''Load the soybean pre-training dataset (weather time series only, no labels).
+
+    Data is normalized per feature (StandardScaler). NaN values are filled with 0
+    after normalization (equivalent to mean imputation).
 
     Args:
         dataset_dir (str): Path to the directory containing pretrain_X.npy.
@@ -208,11 +238,15 @@ def load_soybean_pretrain(dataset_dir):
         pretrain_data (numpy.ndarray): shape (N, T, 9). N=23218, T=366, features=9.
     '''
     pretrain_data = np.load(os.path.join(dataset_dir, 'pretrain_X.npy'))  # (N, T, 9)
+    pretrain_data, _, _ = _normalize_soybean(pretrain_data)
     return pretrain_data
 
 
 def load_soybean_finetune(dataset_dir, train_years=(2015, 2016), val_years=(2017,), test_years=(2018,)):
     '''Load the soybean fine-tuning dataset with a temporal year-based split.
+
+    Data is normalized per feature using statistics from the training split only.
+    NaN values are filled with 0 after normalization.
 
     The TS2Vec encoder is (self-supervised) trained on train data.
     Val data is used for Ridge alpha selection.
@@ -242,11 +276,17 @@ def load_soybean_finetune(dataset_dir, train_years=(2015, 2016), val_years=(2017
     val_mask   = np.isin(years, list(val_years))
     test_mask  = np.isin(years, list(test_years))
 
-    train_data   = X[train_mask]
+    # Train split で正規化パラメータを計算し、全 split に適用
+    train_data = X[train_mask]
+    _, mean, std = _normalize_soybean(train_data)
+
+    train_data, _, _ = _normalize_soybean(X[train_mask], mean, std)
+    val_data,   _, _ = _normalize_soybean(X[val_mask],   mean, std)
+    test_data,  _, _ = _normalize_soybean(X[test_mask],  mean, std)
+
     train_labels = y[train_mask]
-    val_data     = X[val_mask]
     val_labels   = y[val_mask]
-    test_data    = X[test_mask]
     test_labels  = y[test_mask]
 
     return train_data, train_labels, val_data, val_labels, test_data, test_labels
+
