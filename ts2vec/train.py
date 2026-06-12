@@ -40,6 +40,7 @@ if __name__ == '__main__':
     parser.add_argument('--irregular', type=float, default=0, help='The ratio of missing observations (defaults to 0)')
     parser.add_argument('--pretrained-model', type=str, default=None, help='Path to a pretrained TS2Vec model (.pkl) to load before training (used with soybean_finetune loader)')
     parser.add_argument('--freeze-encoder', action='store_true', help='When set, skip TS2Vec encoder training and use pretrained model as-is for encoding only (recommended with soybean_finetune when pretrained-model is specified)')
+    parser.add_argument('--regressor', type=str, default='ridge', choices=['ridge', 'rf'], help='Regression head to use for soybean_finetune evaluation: "ridge" (default) or "rf" (Random Forest)')
     args = parser.parse_args()
     
     print("Dataset:", args.dataset)
@@ -171,14 +172,21 @@ if __name__ == '__main__':
                 model,
                 train_data, train_labels,
                 val_data,   val_labels,
-                test_data,  test_labels
+                test_data,  test_labels,
+                combine_train_val=args.freeze_encoder,
+                regressor=args.regressor
             )
             m = eval_res['metrics']
-            print(f"\n=== Yield Regression Results ===")
-            print(f"  Train │ RMSE={m['train']['RMSE']:.2f}  MAE={m['train']['MAE']:.2f}  R²={m['train']['R2']:.4f}")
-            print(f"  Val   │ RMSE={m['val']['RMSE']:.2f}  MAE={m['val']['MAE']:.2f}  R²={m['val']['R2']:.4f}")
-            print(f"  Test  │ RMSE={m['test']['RMSE']:.2f}  MAE={m['test']['MAE']:.2f}  R²={m['test']['R2']:.4f}")
-            print(f"  Best Ridge alpha: {eval_res['best_ridge_alpha']}")
+            reg_label = eval_res['regressor'].upper()
+            print(f"\n=== Yield Regression Results ({reg_label}) ===")
+            print(f"  Train | RMSE={m['train']['RMSE']:.4f}  MAE={m['train']['MAE']:.4f}  MAPE={m['train']['MAPE']:.2f}%  R2={m['train']['R2']:.4f}")
+            print(f"  Val   | RMSE={m['val']['RMSE']:.4f}  MAE={m['val']['MAE']:.4f}  MAPE={m['val']['MAPE']:.2f}%  R2={m['val']['R2']:.4f}")
+            print(f"  Test  | RMSE={m['test']['RMSE']:.4f}  MAE={m['test']['MAE']:.4f}  MAPE={m['test']['MAPE']:.2f}%  R2={m['test']['R2']:.4f}")
+            if args.regressor == 'ridge':
+                print(f"  Best alpha: {eval_res['best_params']['best_alpha']}")
+            else:
+                bp = eval_res['best_params']
+                print(f"  Best params: n_estimators={bp['n_estimators']}, max_features={bp['max_features']}")
         else:
             assert False
         if out is not None:
