@@ -2,7 +2,7 @@ import numpy as np
 import time
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold
 
 
 # ── Ridge ──────────────────────────────────────────────────────────────────
@@ -188,3 +188,169 @@ def eval_yield_regression(model,
     }
 
     return out, eval_res
+
+
+# ── CV 対応評価（LOYO / 5-Fold CV） ────────────────────────────────────────
+
+def _normalize_per_fold(X_train_raw, X_val_raw, X_test_raw):
+    '''Compute normalization stats from train, apply to all splits.
+
+    NaN values are filled with 0 after normalization (= imputed to mean).
+
+    Args:
+        X_train_raw (np.ndarray): shape (N_train, T, F)
+        X_val_raw   (np.ndarray): shape (N_val,   T, F)
+        X_test_raw  (np.ndarray): shape (N_test,  T, F)
+
+    Returns:
+        X_train, X_val, X_test: normalized arrays of the same shapes.
+    '''
+    X2d = X_train_raw.reshape(-1, X_train_raw.shape[-1])
+    mean = np.nanmean(X2d, axis=0)
+    std  = np.nanstd(X2d, axis=0)
+    std[std < 1e-8] = 1.0  # ゼロ除算防止
+
+    def _apply(X):
+        shape = X.shape
+        X2 = (X.reshape(-1, shape[-1]) - mean) / std
+        X2 = np.nan_to_num(X2, nan=0.0)
+        return X2.reshape(shape).astype(np.float32)
+
+    return _apply(X_train_raw), _apply(X_val_raw), _apply(X_test_raw)
+
+
+def eval_yield_regression_cv(model, X_raw, y, years,
+                              cv_mode='loyo',
+                              n_splits=5,
+                              val_ratio=0.2,
+                              random_state=42,
+                              regressor='ridge'):
+    '''Cross-validated yield regression using TS2Vec representations.
+
+    For each fold:
+      1. Split into test / non-test (LOYO) or test / train-val (KFold)
+      2. Randomly split non-test (or train-val) into train (1-val_ratio)
+         and val (val_ratio) — val is used only for hyperparameter selection
+      3. Normalize using train-fold statistics only (no leakage)
+      4. Encode with TS2Vec (encoding_window="full_series")
+      5. Fit regressor (Ridge alpha or RF params tuned on val)
+      6. Evaluate on test
+
+    Args:
+        model       : Trained / frozen TS2Vec model.
+        X_raw       (np.ndarray): shape (N, T, F) — raw unnormalized data.
+        y           (np.ndarray): shape (N,)       — yield values.
+        years       (np.ndarray): shape (N,)       — year per sample (for LOYO).
+        cv_mode     (str):  'loyo' or 'kfold'.
+        n_splits    (int):  Number of folds for kfold (default 5).
+        val_ratio   (float): Fraction of non-test data used as val (default 0.2).
+        random_state(int):  Random seed for val split and KFold shuffle.
+        regressor   (str):  'ridge' or 'rf'.
+
+    Returns:
+        fold_results (list[dict]): Per-fold metrics + metadata.
+        summary      (dict):       mean/std over all folds.
+    '''
+    if cv_mode not in ('loyo', 'kfold'):
+        raise ValueError(f"cv_mode must be 'loyo' or 'kfold', got '{cv_mode}'")
+
+    # ── fold インデックスのリストを生成 ─────────────────────────────────
+    # 各要素: (fold_label, train_idx, val_idx, test_idx)
+    folds = []
+
+    if cv_mode == 'loyo':
+        unique_years = sorted(set(years.tolist()))
+        for test_year in unique_years:
+            test_idx     = np.where(years == test_year)[0]
+            non_test_idx = np.where(years != test_year)[0]
+            # non-test を train/val にランダム分割
+            tr_idx, va_idx = train_test_split(
+                non_test_idx,
+                test_size=val_ratio,
+                random_state=random_state,
+            )
+            folds.append((f'test_year={test_year}', tr_idx, va_idx, test_idx))
+
+    else:  # kfold
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        for fold_i, (train_val_idx, test_idx) in enumerate(kf.split(X_raw)):
+            tr_idx, va_idx = train_test_split(
+                train_val_idx,
+                test_size=val_ratio,
+                random_state=random_state,
+            )
+            folds.append((f'fold={fold_i + 1}', tr_idx, va_idx, test_idx))
+
+    # ── fold ループ ───────────────────────────────────────────────────────
+    fold_results = []
+
+    print(f'\n{"─" * 60}')
+    print(f'  CV mode : {cv_mode.upper()}  '
+          f'({len(folds)} folds)  regressor={regressor.upper()}')
+    print(f'  val_ratio={val_ratio}  random_state={random_state}')
+    print(f'{"─" * 60}')
+
+    for fold_label, tr_idx, va_idx, te_idx in folds:
+        t_fold = time.time()
+
+        # ── 正規化（train統計のみ使用） ─────────────────────────────────
+        X_tr, X_va, X_te = _normalize_per_fold(
+            X_raw[tr_idx], X_raw[va_idx], X_raw[te_idx]
+        )
+        y_tr = y[tr_idx]
+        y_va = y[va_idx]
+        y_te = y[te_idx]
+
+        # ── TS2Vec エンコード ────────────────────────────────────────────
+        tr_repr = model.encode(X_tr, encoding_window='full_series')
+        va_repr = model.encode(X_va, encoding_window='full_series')
+        te_repr = model.encode(X_te, encoding_window='full_series')
+
+        # ── 回帰モデル学習（val でハイパーパラメータ選択） ────────────────
+        if regressor == 'ridge':
+            reg_model, best_params = _fit_ridge_regression(
+                tr_repr, y_tr, va_repr, y_va
+            )
+        else:
+            reg_model, best_params = _fit_rf_regression(
+                tr_repr, y_tr, va_repr, y_va
+            )
+
+        # ── テスト評価 ───────────────────────────────────────────────────
+        te_pred = reg_model.predict(te_repr)
+        m = _cal_metrics(te_pred, y_te)
+
+        elapsed = time.time() - t_fold
+        param_str = (f'alpha={best_params["best_alpha"]}'
+                     if regressor == 'ridge'
+                     else f'n_est={best_params["n_estimators"]} '
+                          f'max_feat={best_params["max_features"]}')
+
+        print(f'  [{fold_label}]  '
+              f'train={len(tr_idx)} val={len(va_idx)} test={len(te_idx)}  '
+              f'| RMSE={m["RMSE"]:7.3f}  MAE={m["MAE"]:7.3f}  '
+              f'MAPE={m["MAPE"]:6.2f}%  R2={m["R2"]:7.4f}  '
+              f'({elapsed:.1f}s)  [{param_str}]')
+
+        fold_results.append({
+            'fold':      fold_label,
+            'n_train':   len(tr_idx),
+            'n_val':     len(va_idx),
+            'n_test':    len(te_idx),
+            'best_params': best_params,
+            **m,
+        })
+
+    # ── サマリー（mean ± std） ────────────────────────────────────────────
+    summary = {}
+    print(f'\n{"=" * 60}')
+    print(f'  SUMMARY  [{cv_mode.upper()} / {regressor.upper()}]  mean ± std')
+    print(f'{"=" * 60}')
+    for key in ('RMSE', 'MAE', 'MAPE', 'R2'):
+        vals = [r[key] for r in fold_results]
+        summary[f'{key}_mean'] = float(np.mean(vals))
+        summary[f'{key}_std']  = float(np.std(vals))
+        print(f'  {key:<6} : {np.mean(vals):8.3f} ± {np.std(vals):.3f}')
+    print(f'{"=" * 60}')
+
+    return fold_results, summary

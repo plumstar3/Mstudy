@@ -290,3 +290,24 @@ def load_soybean_finetune(dataset_dir, train_years=(2015, 2016), val_years=(2017
 
     return train_data, train_labels, val_data, val_labels, test_data, test_labels
 
+
+def load_soybean_data(dataset_dir):
+    '''Load the soybean fine-tuning dataset without any train/val/test splitting.
+
+    Returns raw (unnormalized) X, y, and year labels for each sample.
+    Normalization should be performed per-fold inside the CV loop to avoid
+    data leakage from test folds into the normalization statistics.
+
+    Args:
+        dataset_dir (str): Path to the directory containing X.npy, y.npy, meta.csv.
+
+    Returns:
+        X     (numpy.ndarray): shape (N, T, 9) — raw weather time series (unnormalized)
+        y     (numpy.ndarray): shape (N,)      — yield values
+        years (numpy.ndarray): shape (N,)      — year label for each sample (int)
+    '''
+    X    = np.load(os.path.join(dataset_dir, 'X.npy'))        # (N, T, 9)
+    y    = np.load(os.path.join(dataset_dir, 'y.npy'))        # (N,)
+    meta = pd.read_csv(os.path.join(dataset_dir, 'meta.csv'))
+    years = meta['year'].to_numpy().astype(int)
+    return X, y, years

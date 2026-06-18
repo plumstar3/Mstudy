@@ -41,6 +41,14 @@ if __name__ == '__main__':
     parser.add_argument('--pretrained-model', type=str, default=None, help='Path to a pretrained TS2Vec model (.pkl) to load before training (used with soybean_finetune loader)')
     parser.add_argument('--freeze-encoder', action='store_true', help='When set, skip TS2Vec encoder training and use pretrained model as-is for encoding only (recommended with soybean_finetune when pretrained-model is specified)')
     parser.add_argument('--regressor', type=str, default='ridge', choices=['ridge', 'rf'], help='Regression head to use for soybean_finetune evaluation: "ridge" (default) or "rf" (Random Forest)')
+    parser.add_argument('--cv-mode', type=str, default='year_fixed',
+                        choices=['year_fixed', 'loyo', 'kfold'],
+                        help=(
+                            'CV method for soybean_finetune evaluation (default: year_fixed)\n'
+                            '  year_fixed : fixed split (train:2015-2016, val:2017, test:2018)\n'
+                            '  loyo       : Leave-One-Year-Out (each year as test once)\n'
+                            '  kfold      : 5-Fold CV (KFold, shuffle=True, random_state=42)'
+                        ))
     args = parser.parse_args()
     
     print("Dataset:", args.dataset)
@@ -95,9 +103,13 @@ if __name__ == '__main__':
 
     elif args.loader == 'soybean_finetune':
         task_type = 'soybean_finetune'
-        # X.npy + y.npy を年度別分割でロード（train:2015-2016, val:2017, test:2018）
-        train_data, train_labels, val_data, val_labels, test_data, test_labels = \
-            datautils.load_soybean_finetune(args.dataset)
+        if args.cv_mode == 'year_fixed':
+            # 固定年度分割（後方互換）
+            train_data, train_labels, val_data, val_labels, test_data, test_labels = \
+                datautils.load_soybean_finetune(args.dataset)
+        else:
+            # LOYO / 5-Fold CV 用: 分割なしで生データをロード
+            cv_X_raw, cv_y, cv_years = datautils.load_soybean_data(args.dataset)
 
     else:
         raise ValueError(f"Unknown loader {args.loader}.")
@@ -122,13 +134,17 @@ if __name__ == '__main__':
         unit = 'epoch' if args.epochs is not None else 'iter'
         config[f'after_{unit}_callback'] = save_checkpoint_callback(args.save_every, unit)
 
-    run_dir = 'training/' + args.run_name + '__' + name_with_datetime(args.run_name)
+    run_dir = 'training/' + name_with_datetime(args.run_name)
     os.makedirs(run_dir, exist_ok=True)
 
     t = time.time()
 
+    # loyo/kfold の場合は cv_X_raw、それ以外は train_data から特徴量次元を取得
+    _ref_data = cv_X_raw if args.loader == 'soybean_finetune' and args.cv_mode != 'year_fixed' \
+                else train_data
+
     model = TS2Vec(
-        input_dims=train_data.shape[-1],
+        input_dims=_ref_data.shape[-1],
         device=device,
         **config
     )
@@ -168,25 +184,43 @@ if __name__ == '__main__':
             print('Pre-training complete. Model saved. No downstream evaluation in pretrain mode.')
             out, eval_res = None, None
         elif task_type == 'soybean_finetune':
-            out, eval_res = tasks.eval_yield_regression(
-                model,
-                train_data, train_labels,
-                val_data,   val_labels,
-                test_data,  test_labels,
-                combine_train_val=args.freeze_encoder,
-                regressor=args.regressor
-            )
-            m = eval_res['metrics']
-            reg_label = eval_res['regressor'].upper()
-            print(f"\n=== Yield Regression Results ({reg_label}) ===")
-            print(f"  Train | RMSE={m['train']['RMSE']:.4f}  MAE={m['train']['MAE']:.4f}  MAPE={m['train']['MAPE']:.2f}%  R2={m['train']['R2']:.4f}")
-            print(f"  Val   | RMSE={m['val']['RMSE']:.4f}  MAE={m['val']['MAE']:.4f}  MAPE={m['val']['MAPE']:.2f}%  R2={m['val']['R2']:.4f}")
-            print(f"  Test  | RMSE={m['test']['RMSE']:.4f}  MAE={m['test']['MAE']:.4f}  MAPE={m['test']['MAPE']:.2f}%  R2={m['test']['R2']:.4f}")
-            if args.regressor == 'ridge':
-                print(f"  Best alpha: {eval_res['best_params']['best_alpha']}")
+            if args.cv_mode == 'year_fixed':
+                out, eval_res = tasks.eval_yield_regression(
+                    model,
+                    train_data, train_labels,
+                    val_data,   val_labels,
+                    test_data,  test_labels,
+                    combine_train_val=args.freeze_encoder,
+                    regressor=args.regressor
+                )
             else:
-                bp = eval_res['best_params']
-                print(f"  Best params: n_estimators={bp['n_estimators']}, max_features={bp['max_features']}")
+                # LOYO / 5-Fold CV
+                fold_results, summary = tasks.eval_yield_regression_cv(
+                    model,
+                    X_raw=cv_X_raw,
+                    y=cv_y,
+                    years=cv_years,
+                    cv_mode=args.cv_mode,
+                    n_splits=5,
+                    val_ratio=0.2,
+                    random_state=42,
+                    regressor=args.regressor,
+                )
+                out      = None
+                eval_res = {'fold_results': fold_results, 'summary': summary}
+            if args.cv_mode == 'year_fixed':
+                m = eval_res['metrics']
+                reg_label = eval_res['regressor'].upper()
+                print(f"\n=== Yield Regression Results ({reg_label}) ===")
+                print(f"  Train | RMSE={m['train']['RMSE']:.4f}  MAE={m['train']['MAE']:.4f}  MAPE={m['train']['MAPE']:.2f}%  R2={m['train']['R2']:.4f}")
+                print(f"  Val   | RMSE={m['val']['RMSE']:.4f}  MAE={m['val']['MAE']:.4f}  MAPE={m['val']['MAPE']:.2f}%  R2={m['val']['R2']:.4f}")
+                print(f"  Test  | RMSE={m['test']['RMSE']:.4f}  MAE={m['test']['MAE']:.4f}  MAPE={m['test']['MAPE']:.2f}%  R2={m['test']['R2']:.4f}")
+                if args.regressor == 'ridge':
+                    print(f"  Best alpha: {eval_res['best_params']['best_alpha']}")
+                else:
+                    bp = eval_res['best_params']
+                    print(f"  Best params: n_estimators={bp['n_estimators']}, max_features={bp['max_features']}")
+            # LOYO / kfold の場合はサマリーを eval_yield_regression_cv 内で表示済み
         else:
             assert False
         if out is not None:
