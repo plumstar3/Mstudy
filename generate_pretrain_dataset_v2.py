@@ -224,14 +224,54 @@ def standardize_gpu(arr, mean, std, xp):
 
 # ── Step 4: 各圃場の栽培期間テーブルを構築 ───────────────────────────────────
 
+def _compute_field_representative_md(questionaire_df: pd.DataFrame) -> dict:
+    """field_id ごとの代表的な播種月日・収穫月日を Questionaire から計算する。
+
+    Questionaire に存在する年（2015〜2018）の seed_date / harvest_date の
+    月・日それぞれの中央値を取り、その field_id の代表月日とする。
+
+    Returns:
+        {field_id: {'seed': (month, day), 'harvest': (month, day)}}
+    """
+    field_md = {}
+    for fid, grp in questionaire_df.groupby('field_id'):
+        fid = int(fid)
+        valid_seed    = grp['seed_date'].dropna()
+        valid_harvest = grp['harvest_date'].dropna()
+
+        seed_md = DEFAULT_SEED_MD
+        if len(valid_seed) > 0:
+            s_month = int(np.median(valid_seed.dt.month.values))
+            s_day   = int(np.median(valid_seed.dt.day.values))
+            seed_md = (s_month, s_day)
+
+        harvest_md = DEFAULT_HARVEST_MD
+        if len(valid_harvest) > 0:
+            h_month = int(np.median(valid_harvest.dt.month.values))
+            h_day   = int(np.median(valid_harvest.dt.day.values))
+            harvest_md = (h_month, h_day)
+
+        field_md[fid] = {'seed': seed_md, 'harvest': harvest_md}
+
+    return field_md
+
+
 def build_period_table(questionaire_df: pd.DataFrame,
                        all_field_ids: list[int],
                        all_years: list[int]) -> pd.DataFrame:
     """(field_id, year) ごとの栽培期間 (start, end, grow_days) を構築する。
 
-    ・Questionaire にある年（2015〜2018）は補完済みの seed_date / harvest_date を使用。
-    ・それ以外の年（1981〜2014）はデフォルト期間（5/1〜10/31）を使用。
-    ・field_id で気象データと紐づけられます。
+    【期間の決定ルール】
+      ① Questionaire にその (field_id, year) が存在する場合
+          → そのレコードの seed_date / harvest_date を使用
+      ② Questionaire にその field_id は存在するが年が異なる場合
+          → その field_id の Questionaire 記録から計算した
+            「代表播種月日・収穫月日」（各年の中央値）を、
+            対象年に適用してクロッピング期間を決定
+          ※ これにより field_id=1 の 1981〜2014 年も、
+            2015〜2018 年の実績に沿った月日でクロッピングされます。
+      ③ その field_id が Questionaire に一切存在しない場合
+          → グローバルデフォルト（5/1〜10/31）を使用
 
     Returns:
         DataFrame with columns:
@@ -241,15 +281,32 @@ def build_period_table(questionaire_df: pd.DataFrame,
     q_index = {(int(r.field_id), int(r.year)): r
                for _, r in questionaire_df.iterrows()}
 
+    # field_id ごとの代表月日を事前計算
+    field_md = _compute_field_representative_md(questionaire_df)
+
     rows = []
     for fid in all_field_ids:
         for year in all_years:
             key = (fid, year)
             if key in q_index:
+                # ① その year の実績値を使用
                 r = q_index[key]
                 start, end, src = resolve_period(r['seed_date'], r['harvest_date'], year)
+            elif fid in field_md:
+                # ② その field_id の代表月日を対象年に適用
+                seed_md    = field_md[fid]['seed']
+                harvest_md = field_md[fid]['harvest']
+                try:
+                    start = pd.Timestamp(year, *seed_md)
+                    end   = pd.Timestamp(year, *harvest_md)
+                    src   = 'field_representative'
+                except ValueError:
+                    # うるう年などで日付が無効な場合はデフォルトにフォールバック
+                    start = pd.Timestamp(year, *DEFAULT_SEED_MD)
+                    end   = pd.Timestamp(year, *DEFAULT_HARVEST_MD)
+                    src   = 'default_date_error'
             else:
-                # Questionaire にない年 → デフォルト期間
+                # ③ Questionaire にまったく存在しない field_id → グローバルデフォルト
                 start = pd.Timestamp(year, *DEFAULT_SEED_MD)
                 end   = pd.Timestamp(year, *DEFAULT_HARVEST_MD)
                 src   = 'default_no_questionaire'
