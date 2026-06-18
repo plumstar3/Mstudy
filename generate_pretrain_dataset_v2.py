@@ -547,6 +547,15 @@ def run(args):
     meta_out['start_date'] = meta_out['start_date'].astype(str)
     meta_out['end_date']   = meta_out['end_date'].astype(str)
 
+    # パディング情報を追加（CSVから確認できるように）
+    #   max_len     : 全サンプル共通のテンソル長（最大grow_days）
+    #   padded_days : 0パディングされたステップ数 = max_len - actual_days
+    #                 （actual_days が有効データ、残りは 0 で埋められている）
+    meta_out['max_len']     = max_len
+    meta_out['padded_days'] = meta_out['actual_days'].apply(
+        lambda d: max(0, max_len - int(d)) if d > 0 else max_len
+    )
+
     # 保存先
     x_path    = OUT_DIR / 'pretrain_X_v2.npy'
     meta_path = OUT_DIR / 'pretrain_meta_v2.csv'
