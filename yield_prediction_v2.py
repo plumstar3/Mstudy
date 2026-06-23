@@ -33,6 +33,10 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
+import matplotlib
+matplotlib.use('Agg')  # 非インタラクティブ環境でもファイル保存できるバックエンド
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 warnings.filterwarnings('ignore')
 
@@ -265,6 +269,96 @@ def calc_metrics(pred, target):
     return {'RMSE': rmse, 'MAE': mae, 'MAPE': mape, 'R2': r2}
 
 
+# ── 予測値 vs 実測値 散布図 ─────────────────────────────────────────────────────
+
+def plot_pred_vs_actual(pred_records, cv_label, pca_label, output_dir):
+    """予測値 vs 実測値の散布図を作成・保存する。
+
+    Args:
+        pred_records : list of {'model', 'fold', 'y_true'(ndarray), 'y_pred'(ndarray)}
+        cv_label     : CV方式ラベル（例: 'kfold', 'loyo'）
+        pca_label    : PCAラベル（例: 'NoPCA', 'PCA(30d)'）
+        output_dir   : PNG 保存先ディレクトリ
+    """
+    model_names = sorted(set(r['model'] for r in pred_records))
+    fold_labels  = sorted(set(r['fold'] for r in pred_records), key=str)
+    n_models     = len(model_names)
+
+    fig, axes = plt.subplots(1, n_models, figsize=(7 * n_models, 6),
+                             facecolor='#f8f9fa')
+    if n_models == 1:
+        axes = [axes]
+
+    # fold ごとの色（tab10 ベース）
+    n_colors   = max(len(fold_labels), 1)
+    palette    = [cm.tab10(i / max(n_colors - 1, 1)) for i in range(n_colors)]
+    fold_color = {fl: palette[i] for i, fl in enumerate(fold_labels)}
+
+    for ax, model_name in zip(axes, model_names):
+        recs     = [r for r in pred_records if r['model'] == model_name]
+        all_true = np.concatenate([r['y_true'] for r in recs])
+        all_pred = np.concatenate([r['y_pred'] for r in recs])
+
+        # fold ごとに色分けして散布図を描画
+        for fold_label in fold_labels:
+            fold_recs = [r for r in recs if r['fold'] == fold_label]
+            if not fold_recs:
+                continue
+            yt = np.concatenate([r['y_true'] for r in fold_recs])
+            yp = np.concatenate([r['y_pred'] for r in fold_recs])
+            ax.scatter(yt, yp, alpha=0.65, s=45,
+                       color=fold_color[fold_label],
+                       label=str(fold_label), zorder=3,
+                       edgecolors='white', linewidths=0.4)
+
+        # 完全予測線 (y = x)
+        lims_min = min(all_true.min(), all_pred.min())
+        lims_max = max(all_true.max(), all_pred.max())
+        margin   = (lims_max - lims_min) * 0.06
+        lims     = [lims_min - margin, lims_max + margin]
+        ax.plot(lims, lims, '--', color='#333333', lw=1.5,
+                label='Perfect prediction', zorder=2)
+        ax.set_xlim(lims)
+        ax.set_ylim(lims)
+
+        # 全体指標（テキストボックス）
+        rmse   = float(np.sqrt(((all_pred - all_true) ** 2).mean()))
+        mae    = float(np.abs(all_pred - all_true).mean())
+        ss_res = ((all_true - all_pred) ** 2).sum()
+        ss_tot = ((all_true - all_true.mean()) ** 2).sum()
+        r2     = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+        textstr = f'RMSE = {rmse:.3f}\nMAE  = {mae:.3f}\nR\u00b2   = {r2:.4f}'
+        ax.text(0.04, 0.96, textstr,
+                transform=ax.transAxes, fontsize=9.5,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white',
+                          alpha=0.87, edgecolor='#cccccc'))
+
+        ax.set_xlabel('Actual Yield', fontsize=12)
+        ax.set_ylabel('Predicted Yield', fontsize=12)
+        ax.set_title(model_name, fontsize=13, fontweight='bold', pad=10)
+        ax.legend(fontsize=9, title='Fold / Year', loc='lower right',
+                  framealpha=0.85)
+        ax.set_facecolor('#fdfdfd')
+        ax.grid(True, alpha=0.25, linestyle='-', linewidth=0.8)
+        ax.set_axisbelow(True)
+
+    fig.suptitle(
+        f'Predicted vs Actual Yield\n[{cv_label}  /  {pca_label}]',
+        fontsize=13, fontweight='bold', y=1.01
+    )
+    fig.tight_layout()
+
+    def _safe(s):
+        return str(s).replace('(', '').replace(')', '').replace(' ', '_')
+
+    fname = f'pred_vs_actual_{_safe(cv_label)}_{_safe(pca_label)}.png'
+    fpath = os.path.join(output_dir, fname)
+    fig.savefig(fpath, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f'  → 散布図保存: {fpath}')
+
+
 # ── モデル定義（Pipeline: Imputer → Scaler [→ PCA] → モデル） ────────────────
 
 def make_models(use_pca=False, pca_n=PCA_N_DEFAULT):
@@ -303,25 +397,28 @@ def make_models(use_pca=False, pca_n=PCA_N_DEFAULT):
 
 # ── 共通: fold ループ実行 ─────────────────────────────────────────────────────
 
-def _run_folds(X, y, splits_iter, n_folds_label, models):
+def _run_folds(X, y, splits_iter, n_folds_label, models,
+               pred_store=None, fold_labels=None):
     """(train_idx, val_idx) のイテレータを受け取り、fold ごとに学習・評価する。
 
     Args:
-        splits_iter   : enumerate 済みの (fold_idx, train_idx, val_idx) イテラブル
-                        ※ 実際には enumerate なしで (tr, va) のペアを渡す
+        splits_iter   : (tr_idx, va_idx) のペアを yield するイテラブル
         n_folds_label : サマリー表示用のフォールド数文字列 (例: "5", "LOYO-4")
-        models        : make_models() が返す dict（毎 fold でリセットされない！
-                        ※ Pipeline は fit のたびに上書きされるので問題なし）
+        models        : make_models() が返す dict
+        pred_store    : Noneでない場合、fold ごとの予測値を追記する list
+                        要素形式: {'model', 'fold', 'y_true', 'y_pred'}
+        fold_labels   : fold ごとのラベルリスト（例: LOYO の場合は年リスト）。
+                        None の場合は 1 始まりの整数を使用。
 
     Returns:
         metrics  : {model_name: [fold_metric_dict, ...]}
-        fold_log : list of dicts（CSV 保存用）
     """
     metrics = {name: [] for name in models}
 
     for fold_idx, (tr_idx, va_idx) in enumerate(splits_iter):
         X_tr, X_va = X[tr_idx], X[va_idx]
         y_tr, y_va = y[tr_idx], y[va_idx]
+        fold_label = fold_labels[fold_idx] if fold_labels is not None else fold_idx + 1
 
         print(f'  Fold {fold_idx + 1}  (train={len(y_tr)} val={len(y_va)})')
 
@@ -331,6 +428,13 @@ def _run_folds(X, y, splits_iter, n_folds_label, models):
             pred = pipeline.predict(X_va)
             m    = calc_metrics(pred, y_va)
             metrics[model_name].append(m)
+            if pred_store is not None:
+                pred_store.append({
+                    'model':  model_name,
+                    'fold':   fold_label,
+                    'y_true': y_va.copy(),
+                    'y_pred': pred.copy(),
+                })
             print(f'    {model_name:<10} RMSE={m["RMSE"]:7.3f}  MAE={m["MAE"]:7.3f}  '
                   f'MAPE={m["MAPE"]:6.2f}%  R2={m["R2"]:7.4f}  '
                   f'({time.time()-t0:.1f}s)')
@@ -372,7 +476,7 @@ def _print_summary(metrics, cv_label, use_pca, pca_n):
 
 # ── CV方式ごとの実行関数 ──────────────────────────────────────────────────────
 
-def run_kfold(X, y, use_pca, pca_n):
+def run_kfold(X, y, use_pca, pca_n, output_dir=None):
     """5-Fold CV を実行する。
 
     Returns:
@@ -383,16 +487,22 @@ def run_kfold(X, y, use_pca, pca_n):
     print(f'  KFold(n_splits={N_SPLITS}, shuffle=True, random_state={RANDOM_STATE})')
     print(f'{"─" * 65}')
 
-    kf      = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
-    models  = make_models(use_pca=use_pca, pca_n=pca_n)
-    metrics = _run_folds(X, y, kf.split(X), N_SPLITS, models)
-    return _print_summary(metrics, 'kfold', use_pca, pca_n)
+    kf         = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
+    models     = make_models(use_pca=use_pca, pca_n=pca_n)
+    pred_store = [] if output_dir else None
+    metrics    = _run_folds(X, y, kf.split(X), N_SPLITS, models, pred_store=pred_store)
+    rows       = _print_summary(metrics, 'kfold', use_pca, pca_n)
+    if output_dir and pred_store:
+        pca_label = f'PCA({pca_n}d)' if use_pca else 'NoPCA'
+        plot_pred_vs_actual(pred_store, 'kfold', pca_label, output_dir)
+    return rows
 
 
-def run_loyo(X, y, meta, use_pca, pca_n):
+def run_loyo(X, y, meta, use_pca, pca_n, output_dir=None):
     """Leave-One-Year-Out CV を実行する。
 
     各年を 1 回ずつ test セットにする（年度数 = フォールド数）。
+    散布図では fold ラベルにテスト年（例: 2015）を使用する。
 
     Returns:
         summary_rows : list of dicts（CSV 保存用）
@@ -414,12 +524,20 @@ def run_loyo(X, y, meta, use_pca, pca_n):
                   f'train={len(tr_idx)}  val={len(va_idx)}')
             yield tr_idx, va_idx
 
-    models  = make_models(use_pca=use_pca, pca_n=pca_n)
-    metrics = _run_folds(X, y, _splits(), len(years), models)
-    return _print_summary(metrics, 'loyo', use_pca, pca_n)
+    models     = make_models(use_pca=use_pca, pca_n=pca_n)
+    pred_store = [] if output_dir else None
+    # fold_labels=years で散布図の凡例にテスト年を表示
+    metrics    = _run_folds(X, y, _splits(), len(years), models,
+                            pred_store=pred_store, fold_labels=years)
+    rows       = _print_summary(metrics, 'loyo', use_pca, pca_n)
+    if output_dir and pred_store:
+        pca_label = f'PCA({pca_n}d)' if use_pca else 'NoPCA'
+        plot_pred_vs_actual(pred_store, 'loyo', pca_label, output_dir)
+    return rows
 
 
-def run_year_fixed(X, y, meta, use_pca, pca_n, test_year=FIXED_TEST_YEAR):
+def run_year_fixed(X, y, meta, use_pca, pca_n, test_year=FIXED_TEST_YEAR,
+                   output_dir=None):
     """固定年度分割を実行する（test_year をテストセット、残りをトレーニングセット）。
 
     1 fold のみなので標準偏差は 0 となる。
@@ -429,7 +547,7 @@ def run_year_fixed(X, y, meta, use_pca, pca_n, test_year=FIXED_TEST_YEAR):
     """
     print(f'\n{"─" * 65}')
     print(f'  [固定年度分割]  PCA={"あり(" + str(pca_n) + "d)" if use_pca else "なし"}')
-    print(f'  train: {[y for y in sorted(meta["year"].unique()) if y != test_year]}  '
+    print(f'  train: {[yr for yr in sorted(meta["year"].unique()) if yr != test_year]}  '
           f'test: {test_year}')
     print(f'{"─" * 65}')
 
@@ -445,21 +563,27 @@ def run_year_fixed(X, y, meta, use_pca, pca_n, test_year=FIXED_TEST_YEAR):
     def _splits():
         yield tr_idx, va_idx
 
-    models  = make_models(use_pca=use_pca, pca_n=pca_n)
-    metrics = _run_folds(X, y, _splits(), 1, models)
-    return _print_summary(metrics, f'year_fixed({test_year})', use_pca, pca_n)
+    models     = make_models(use_pca=use_pca, pca_n=pca_n)
+    pred_store = [] if output_dir else None
+    metrics    = _run_folds(X, y, _splits(), 1, models, pred_store=pred_store,
+                            fold_labels=[test_year])
+    rows       = _print_summary(metrics, f'year_fixed({test_year})', use_pca, pca_n)
+    if output_dir and pred_store:
+        pca_label = f'PCA({pca_n}d)' if use_pca else 'NoPCA'
+        plot_pred_vs_actual(pred_store, f'year_fixed({test_year})', pca_label, output_dir)
+    return rows
 
 
 # ── 単一パターン実行ラッパー ──────────────────────────────────────────────────
 
-def run_single(X, y, meta, cv_mode, use_pca, pca_n):
+def run_single(X, y, meta, cv_mode, use_pca, pca_n, output_dir=None):
     """1 パターン（cv_mode × PCA有無）を実行して summary_rows を返す。"""
     if cv_mode == 'kfold':
-        return run_kfold(X, y, use_pca, pca_n)
+        return run_kfold(X, y, use_pca, pca_n, output_dir=output_dir)
     elif cv_mode == 'loyo':
-        return run_loyo(X, y, meta, use_pca, pca_n)
+        return run_loyo(X, y, meta, use_pca, pca_n, output_dir=output_dir)
     elif cv_mode == 'year_fixed':
-        return run_year_fixed(X, y, meta, use_pca, pca_n)
+        return run_year_fixed(X, y, meta, use_pca, pca_n, output_dir=output_dir)
     else:
         raise ValueError(f'不明な cv_mode: {cv_mode}')
 
@@ -477,7 +601,7 @@ def run_ablation(X, y, meta, pca_n, output_dir):
               f'cv={cv_mode}  pca={pca_str}')
         print(f'{"#" * 65}')
 
-        rows = run_single(X, y, meta, cv_mode, use_pca, pca_n)
+        rows = run_single(X, y, meta, cv_mode, use_pca, pca_n, output_dir=output_dir)
         all_rows.extend(rows)
 
         # パターンごとの CSV 保存
@@ -558,10 +682,8 @@ def main(args):
         run_ablation(X, y, meta, pca_n=args.pca_n, output_dir=args.output_dir)
 
     else:
-        rows = run_single(X, y, meta,
-                          cv_mode=args.cv_mode,
-                          use_pca=args.pca,
-                          pca_n=args.pca_n)
+        rows = run_single(X, y, meta, cv_mode=args.cv_mode, use_pca=args.pca, pca_n=args.pca_n,
+                          output_dir=args.output_dir)
 
         csv_path = os.path.join(args.output_dir, 'cv_results_v2.csv')
         pd.DataFrame(rows).to_csv(csv_path, index=False)
