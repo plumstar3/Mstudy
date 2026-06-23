@@ -2,17 +2,18 @@
 impute_weather_all_columns.py
 ============================================================
 weather_database_fieldid.db の全気象変数列について、
-全行 NULL または部分 NULL となっている圃場を
+全行 NULL となっている圃場を
 空間的最近傍補完（Spatial Nearest-Neighbor Imputation）する。
 
 【処理フロー】
   Step 1 : 全列×全 field_id の NULL 状況をスキャン
   Step 2 : 補完が必要な (field_id, col) ペアを特定
-  Step 3 : 欠損パターン（全行NULL / 部分NULL）を分類
-  Step 4 : 各 field_id に対してハーバーサイン距離で最近傍 donor を選択
+           ・APCPRA / RH / WIND / DLR は 2008-01-01 以降の期間で判定
+             （これら4列は 1981〜2007 年分が全圃場でデータなし）
+  Step 3 : 各 field_id に対してハーバーサイン距離で最近傍 donor を選択
              → 距離計算は GPU（CuPy）があれば GPU、なければ NumPy で実行
-  Step 5 : donor の値で NULL 行を UPDATE（一時テーブル + サブクエリ方式）
-  Step 6 : 補完後の NULL 状況を再確認し、ログを保存
+  Step 4 : donor の値で NULL 行を UPDATE（一時テーブル + サブクエリ方式）
+  Step 5 : 補完後の NULL 状況を再確認し、ログを保存
 
 【GPU 対応】
   CuPy がインストールされていれば自動的に GPU で距離計算を実行。
@@ -56,6 +57,11 @@ SKIP_COLS = {'date', 'place', 'lat', 'lon', 'field_id'}
 # 全行 NULL と判定する閾値（null_ratio > この値で全行NULLとみなす）
 ALL_NULL_THRESHOLD = 0.99
 
+# 2008年以降にデータが追加された列（1981〜2007年は全圃場でNULLが正常）
+# → donorの選定・補完対象の判定を 2008-01-01 以降に限定する
+LATE_START_COLS = {'APCPRA', 'RH', 'WIND', 'DLR'}
+LATE_START_DATE = '2008-01-01'
+
 
 # ── ハーバーサイン距離（GPU/CPU 自動切り替え） ────────────────────────────────
 
@@ -79,13 +85,15 @@ def haversine_km(lat1: float, lon1: float,
 
 # ── Step 1: 全列×全 field_id の NULL スキャン ────────────────────────────────
 
-def scan_null_status(conn) -> pd.DataFrame:
+def scan_null_status(conn) -> tuple[pd.DataFrame, list[str]]:
     """全気象変数列の field_id 別 NULL 件数を集計する。
 
+    LATE_START_COLS については 2008-01-01 以降の期間で NULL 率を計算。
+
     Returns:
-        DataFrame: field_id, col, total_rows, null_count, null_ratio, lat, lon
+        (scan_df, weather_cols)
+        scan_df: field_id, col, total_rows, null_count, null_ratio, lat, lon
     """
-    # 対象列を取得
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(weather_data)")
     all_cols = [row[1] for row in cursor.fetchall()]
@@ -94,66 +102,150 @@ def scan_null_status(conn) -> pd.DataFrame:
     print(f'  気象変数列: {weather_cols}')
     print(f'  列数: {len(weather_cols)}')
 
-    # field_id ごとの集計（1クエリで全列を集計）
-    null_exprs = ', '.join(
+    # 通常列の集計（全期間）
+    normal_cols = [c for c in weather_cols if c not in LATE_START_COLS]
+    late_cols   = [c for c in weather_cols if c in LATE_START_COLS]
+
+    # --- 通常列（全期間）---
+    normal_exprs = ', '.join(
         [f'SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) AS null_{c}'
-         for c in weather_cols]
-    )
-    df_agg = pd.read_sql(f'''
+         for c in normal_cols]
+    ) if normal_cols else '1'
+
+    df_normal = pd.read_sql(f'''
         SELECT field_id,
                COUNT(*) AS total_rows,
-               AVG(lat) AS lat,
-               AVG(lon) AS lon,
-               {null_exprs}
+               AVG(lat)  AS lat,
+               AVG(lon)  AS lon
+               {"," + normal_exprs if normal_cols else ""}
         FROM weather_data
         GROUP BY field_id
     ''', conn)
 
+    # --- LATE_START_COLS（2008年以降のみ）---
+    if late_cols:
+        late_exprs = ', '.join(
+            [f'SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) AS null_{c}'
+             for c in late_cols]
+        )
+        df_late = pd.read_sql(f'''
+            SELECT field_id,
+                   COUNT(*) AS total_rows_late
+                   ,{late_exprs}
+            FROM weather_data
+            WHERE date >= '{LATE_START_DATE}'
+            GROUP BY field_id
+        ''', conn)
+    else:
+        df_late = None
+
     # ロング形式に変換
     records = []
-    for _, row in df_agg.iterrows():
+
+    for _, row in df_normal.iterrows():
         fid   = int(row['field_id'])
         total = int(row['total_rows'])
         lat   = float(row['lat']) if pd.notna(row['lat']) else None
         lon   = float(row['lon']) if pd.notna(row['lon']) else None
-        for col in weather_cols:
+
+        for col in normal_cols:
             null_cnt = int(row[f'null_{col}'])
             if null_cnt > 0:
                 records.append({
-                    'field_id':   fid,
-                    'col':        col,
-                    'total_rows': total,
-                    'null_count': null_cnt,
-                    'null_ratio': null_cnt / total,
-                    'lat':        lat,
-                    'lon':        lon,
+                    'field_id':       fid,
+                    'col':            col,
+                    'total_rows':     total,
+                    'null_count':     null_cnt,
+                    'null_ratio':     null_cnt / total,
+                    'lat':            lat,
+                    'lon':            lon,
+                    'period_limited': False,
                 })
 
-    return pd.DataFrame(records) if records else pd.DataFrame(
-        columns=['field_id', 'col', 'total_rows', 'null_count', 'null_ratio', 'lat', 'lon']
-    ), weather_cols
+    if df_late is not None:
+        # df_normal から lat/lon を引く
+        geo_map = df_normal.set_index('field_id')[['lat', 'lon']].to_dict('index')
+
+        for _, row in df_late.iterrows():
+            fid        = int(row['field_id'])
+            total_late = int(row['total_rows_late'])
+            lat = geo_map.get(fid, {}).get('lat', None)
+            lon = geo_map.get(fid, {}).get('lon', None)
+            if lat is not None and pd.isna(lat):
+                lat = None
+            if lon is not None and pd.isna(lon):
+                lon = None
+
+            for col in late_cols:
+                null_cnt = int(row[f'null_{col}'])
+                if null_cnt > 0:
+                    records.append({
+                        'field_id':       fid,
+                        'col':            col,
+                        'total_rows':     total_late,   # 2008以降の行数
+                        'null_count':     null_cnt,
+                        'null_ratio':     null_cnt / total_late if total_late > 0 else 1.0,
+                        'lat':            lat,
+                        'lon':            lon,
+                        'period_limited': True,         # 期間限定スキャンフラグ
+                    })
+
+    scan_df = pd.DataFrame(records) if records else pd.DataFrame(
+        columns=['field_id', 'col', 'total_rows', 'null_count',
+                 'null_ratio', 'lat', 'lon', 'period_limited']
+    )
+    return scan_df, weather_cols
 
 
 # ── Step 2: 最近傍 donor 選択 ─────────────────────────────────────────────────
 
+# NULL 率の許容閾値（これ未満なら donor として使用可）
+# APCPRA/RH/WIND は全圃場で 2008 以降に 1 行だけ NULL が残るため
+# 厳密な = 0 条件では donor が見つからない → 1% 未満を許容する
+DONOR_MAX_NULL_RATIO = 0.01
+
+
 def find_donor(conn, fid: int, lat: float, lon: float,
-               null_cols: list[str], max_dist: float) -> tuple:
-    """指定列がすべて完全な最近傍 donor を返す。
+               null_cols: list[str], max_dist: float,
+               period_limited: bool = False) -> tuple:
+    """指定列の NULL 率が DONOR_MAX_NULL_RATIO 未満の最近傍 donor を返す。
+
+    period_limited=True の場合、LATE_START_DATE 以降の期間で判定する。
+    NULL が完全に 0 の圃場を優先し、なければ 1% 未満の圃場をフォールバックとする。
 
     Returns:
         (donor_fid, dist_km, note) or (None, None, 'no_donor')
     """
-    cond = ' AND '.join(
+    where_date = f"AND date >= '{LATE_START_DATE}'" if period_limited else ''
+
+    # まず厳密条件（NULL=0）で探す
+    cond_strict = ' AND '.join(
         [f'SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) = 0'
          for c in null_cols]
     )
     df_donors = pd.read_sql(f'''
         SELECT field_id, AVG(lat) AS lat, AVG(lon) AS lon
         FROM weather_data
-        WHERE field_id != ?
+        WHERE field_id != ? {where_date}
         GROUP BY field_id
-        HAVING {cond} AND AVG(lat) IS NOT NULL AND AVG(lon) IS NOT NULL
+        HAVING {cond_strict} AND AVG(lat) IS NOT NULL AND AVG(lon) IS NOT NULL
     ''', conn, params=(fid,))
+
+    # 厳密条件で見つからなければ NULL率 < DONOR_MAX_NULL_RATIO で再検索
+    if df_donors.empty:
+        cond_loose = ' AND '.join(
+            [f'CAST(SUM(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) AS REAL) / COUNT(*) < {DONOR_MAX_NULL_RATIO}'
+             for c in null_cols]
+        )
+        df_donors = pd.read_sql(f'''
+            SELECT field_id, AVG(lat) AS lat, AVG(lon) AS lon
+            FROM weather_data
+            WHERE field_id != ? {where_date}
+            GROUP BY field_id
+            HAVING {cond_loose} AND AVG(lat) IS NOT NULL AND AVG(lon) IS NOT NULL
+        ''', conn, params=(fid,))
+        if not df_donors.empty:
+            print(f'    [INFO] 厳密条件(NULL=0)でdonor不在 → NULL率<{DONOR_MAX_NULL_RATIO:.0%}で再検索')
 
     if df_donors.empty:
         return None, None, 'no_donor'
@@ -178,17 +270,29 @@ def find_donor(conn, fid: int, lat: float, lon: float,
 # ── Step 3: 一時テーブル経由 UPDATE ──────────────────────────────────────────
 
 def update_from_donor(conn, target_fid: int, donor_fid: int,
-                       null_cols: list[str]) -> dict:
+                      null_cols: list[str],
+                      period_limited: bool = False) -> dict:
     """donor の値で target_fid の NULL 行を一括 UPDATE する。
+
+    period_limited=True の場合、LATE_START_DATE 以降の行のみ UPDATE 対象。
 
     Returns:
         {col: updated_rows}
     """
     col_list = ', '.join(null_cols)
-    df_donor = pd.read_sql(
-        f'SELECT date, {col_list} FROM weather_data WHERE field_id = ?',
-        conn, params=(donor_fid,)
-    )
+
+    if period_limited:
+        df_donor = pd.read_sql(
+            f"SELECT date, {col_list} FROM weather_data "
+            f"WHERE field_id = ? AND date >= '{LATE_START_DATE}'",
+            conn, params=(donor_fid,)
+        )
+    else:
+        df_donor = pd.read_sql(
+            f'SELECT date, {col_list} FROM weather_data WHERE field_id = ?',
+            conn, params=(donor_fid,)
+        )
+
     rename_map = {c: f'_d_{c}' for c in null_cols}
     df_donor   = df_donor.rename(columns=rename_map)
 
@@ -231,18 +335,14 @@ def run():
     print('  weather_database_fieldid.db  全列 NULL 補完')
     print(f'  GPU: {"使用 (CuPy)" if GPU_AVAILABLE else "なし (NumPy)"}')
     print(f'  最大探索距離: {MAX_DIST_KM} km')
+    print(f'  期間限定列 ({LATE_START_DATE} 以降で判定): {sorted(LATE_START_COLS)}')
     print('=' * 65)
 
     conn = sqlite3.connect(WEATHER_DB)
 
     # ── Step 1: NULL スキャン ────────────────────────────────────────────────
     print('\n[Step 1] NULL 状況スキャン中...')
-    result = scan_null_status(conn)
-    if isinstance(result, tuple):
-        scan_df, weather_cols = result
-    else:
-        scan_df = result
-        weather_cols = []
+    scan_df, weather_cols = scan_null_status(conn)
 
     if scan_df.empty:
         print('  NULL のある列・圃場はありません。処理不要。')
@@ -263,19 +363,31 @@ def run():
     print(summary.to_string(index=False))
 
     # ── Step 2: 補完対象を特定 ──────────────────────────────────────────────
-    # field_id ごとに欠損列をまとめる
-    # 全行 NULL のみを対象（部分 NULL は別途扱い）
     all_null_df  = scan_df[scan_df['null_type'] == 'all_null']
     part_null_df = scan_df[scan_df['null_type'] == 'partial_null']
 
     print(f'\n  全行NULL: {len(all_null_df)} (field_id×col) ペア')
-    print(f'  部分NULL: {len(part_null_df)} (field_id×col) ペア')
+    print(f'  部分NULL: {len(part_null_df)} (field_id×col) ペア（補完対象外）')
 
     # field_id → 欠損列リスト のマップ（全行NULL）
+    # period_limited フラグを保持するため、列ごとにグループ化
+    # すべての欠損列が period_limited なら True、混在は False
+    def agg_fid(grp):
+        cols = grp['col'].tolist()
+        lats = grp['lat'].tolist()
+        lons = grp['lon'].tolist()
+        period_flags = grp['period_limited'].tolist()
+        # 全列が period_limited なら True
+        pl = all(period_flags)
+        return pd.Series({
+            'null_cols':      cols,
+            'lat':            lats[0],
+            'lon':            lons[0],
+            'period_limited': pl,
+        })
+
     fid_cols_map = (all_null_df.groupby('field_id')
-                    .agg(null_cols=('col', list),
-                         lat=('lat', 'first'),
-                         lon=('lon', 'first'))
+                    .apply(agg_fid)
                     .reset_index())
 
     print(f'\n  補完対象圃場数（全行NULL）: {len(fid_cols_map)}')
@@ -286,54 +398,64 @@ def run():
     total_fids = len(fid_cols_map)
 
     for i, row in enumerate(fid_cols_map.itertuples(), 1):
-        fid       = int(row.field_id)
-        null_cols = row.null_cols
-        lat       = row.lat
-        lon       = row.lon
+        fid            = int(row.field_id)
+        null_cols      = row.null_cols
+        lat            = row.lat
+        lon            = row.lon
+        period_limited = row.period_limited
 
-        print(f'\n  [{i:3d}/{total_fids}] field_id={fid}  欠損列={null_cols}')
+        period_str = f'[{LATE_START_DATE}以降]' if period_limited else '[全期間]'
+        print(f'\n  [{i:3d}/{total_fids}] field_id={fid}  {period_str}  欠損列={null_cols}')
 
-        if lat is None or lon is None or np.isnan(lat) or np.isnan(lon):
+        if lat is None or lon is None or (isinstance(lat, float) and np.isnan(lat)):
             print('    !! lat/lon 不明 → スキップ')
             log_rows.append({'field_id': fid, 'null_cols': str(null_cols),
                              'donor_fid': None, 'dist_km': None,
-                             'status': 'skip_no_geo', 'updated_total': 0})
+                             'status': 'skip_no_geo', 'updated_total': 0,
+                             'period_limited': period_limited})
             continue
 
         print(f'    lat={lat:.6f}  lon={lon:.6f}')
 
         # donor 検索
-        donor_fid, dist_km, note = find_donor(conn, fid, lat, lon,
-                                               null_cols, MAX_DIST_KM)
+        donor_fid, dist_km, note = find_donor(
+            conn, fid, lat, lon, null_cols, MAX_DIST_KM,
+            period_limited=period_limited
+        )
         if donor_fid is None:
             print(f'    !! donor なし → スキップ')
             log_rows.append({'field_id': fid, 'null_cols': str(null_cols),
                              'donor_fid': None, 'dist_km': None,
-                             'status': 'skip_no_donor', 'updated_total': 0})
+                             'status': 'skip_no_donor', 'updated_total': 0,
+                             'period_limited': period_limited})
             continue
 
         print(f'    → donor: field_id={donor_fid}  距離={dist_km:.2f} km  ({note})')
 
         # UPDATE 実行
-        updated = update_from_donor(conn, fid, donor_fid, null_cols)
+        updated = update_from_donor(
+            conn, fid, donor_fid, null_cols,
+            period_limited=period_limited
+        )
         total_upd = sum(updated.values())
         for col, n in updated.items():
             print(f'       {col}: {n:,} 行 UPDATE')
         print(f'    合計: {total_upd:,} 行')
 
         log_rows.append({
-            'field_id':      fid,
-            'null_cols':     str(null_cols),
-            'donor_fid':     donor_fid,
-            'dist_km':       round(dist_km, 3),
-            'status':        note,
-            'updated_total': total_upd,
+            'field_id':       fid,
+            'null_cols':      str(null_cols),
+            'donor_fid':      donor_fid,
+            'dist_km':        round(dist_km, 3),
+            'status':         note,
+            'updated_total':  total_upd,
+            'period_limited': period_limited,
         })
 
-    # ── Step 4: 部分NULL の報告（今回は補完しない）──────────────────────────
+    # ── Step 4: 部分NULL の報告（対象外）──────────────────────────────────
     if not part_null_df.empty:
-        print(f'\n[INFO] 部分NULL（{len(part_null_df)} ペア）は今回の対象外です。')
-        print('  → 必要な場合は --partial フラグで個別処理してください。')
+        print(f'\n[INFO] 部分NULL（{len(part_null_df)} ペア）は補完対象外です。')
+        print('  （APCPRA/RH/WIND/DLRの部分NULLは1981〜2007年のデータなしに起因）')
         part_summary = (part_null_df.groupby('col')
                         .agg(fields=('field_id', 'count'),
                              avg_null_ratio=('null_ratio', 'mean'))
@@ -364,22 +486,30 @@ def run():
     # ── 補完後 NULL 確認 ─────────────────────────────────────────────────────
     print('\n[Step 3] 補完後 NULL 確認...')
     conn2 = sqlite3.connect(WEATHER_DB)
-    result2 = scan_null_status(conn2)
-    if isinstance(result2, tuple):
-        scan_after, _ = result2
-    else:
-        scan_after = result2
+    result2_scan, _ = scan_null_status(conn2)
+    conn2.close()
 
-    if scan_after.empty:
-        print('  全行NULL の残留なし。補完完了。')
+    if result2_scan.empty:
+        print('  残留 NULL なし。補完完了。')
     else:
-        remaining = scan_after[scan_after['null_ratio'] >= ALL_NULL_THRESHOLD]
-        if remaining.empty:
+        remaining_all = result2_scan[result2_scan['null_ratio'] >= ALL_NULL_THRESHOLD]
+        if remaining_all.empty:
             print('  全行NULL の残留なし。')
         else:
-            print(f'  残留する全行NULL: {len(remaining)} ペア')
-            print(remaining[['field_id', 'col', 'null_count']].to_string(index=False))
-    conn2.close()
+            print(f'  残留する全行NULL: {len(remaining_all)} ペア')
+            print(remaining_all[['field_id', 'col', 'null_count',
+                                  'period_limited']].to_string(index=False))
+
+        # 部分NULLの残留も表示
+        partial = result2_scan[result2_scan['null_ratio'] < ALL_NULL_THRESHOLD]
+        if not partial.empty:
+            print(f'\n  部分NULL残留（データ仕様上正常）: {len(partial)} ペア')
+            psummary = (partial.groupby('col')
+                        .agg(fields=('field_id', 'count'),
+                             avg_null_ratio=('null_ratio', 'mean'))
+                        .reset_index())
+            psummary['avg_null_ratio'] = psummary['avg_null_ratio'].map('{:.1%}'.format)
+            print(psummary.to_string(index=False))
 
 
 if __name__ == '__main__':
