@@ -79,14 +79,16 @@ def load_questionaire(field_db: Path, year_start: int, year_end: int) -> pd.Data
 
     # seed_date が NaT の場合は year/5/1 をデフォルトとして補完
     mask_no_sd = df['seed_date'].isna()
-    df.loc[mask_no_sd, 'seed_date'] = df.loc[mask_no_sd, 'year'].apply(
-        lambda y: pd.Timestamp(y, 5, 1)
-    )
+    if mask_no_sd.any():
+        df.loc[mask_no_sd, 'seed_date'] = pd.to_datetime(
+            df.loc[mask_no_sd, 'year'].astype(str) + '-05-01'
+        )
     # harvest_date が NaT の場合は year/10/31 をデフォルトとして補完
     mask_no_hd = df['harvest_date'].isna()
-    df.loc[mask_no_hd, 'harvest_date'] = df.loc[mask_no_hd, 'year'].apply(
-        lambda y: pd.Timestamp(y, 10, 31)
-    )
+    if mask_no_hd.any():
+        df.loc[mask_no_hd, 'harvest_date'] = pd.to_datetime(
+            df.loc[mask_no_hd, 'year'].astype(str) + '-10-31'
+        )
 
     return df.reset_index(drop=True)
 
