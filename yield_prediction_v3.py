@@ -460,13 +460,57 @@ def build_gdd_features(gdd_df: pd.DataFrame, weather_df: pd.DataFrame) -> pd.Dat
     return grp_pivot.reset_index()  # field_id, year, 135 特徴量列
 
 
+# ── 年偏差特徴量 ──────────────────────────────────────────────────────────────
+
+def compute_year_deviation(feat_df: pd.DataFrame, feat_cols: list,
+                           mode: str = 'replace') -> tuple:
+    """気象特徴量を「年内平均からの偏差」に変換する。
+
+    LOYO では「絶対値の特徴量」が年のプロキシになり、汎化を妨げる。
+    偏差に変換することで「この圃場は同年の他圃場より暑かった/寒かった」という
+    相対情報のみをモデルに与え、年をまたいだ汎化性を高める。
+
+    Args:
+        feat_df  : build_gdd_features の出力 (field_id, year, 135列)
+        feat_cols: 処理対象の気象特徴量列名リスト
+        mode     : 'replace' → 絶対値を偏差に置き換える
+                   'add'     → 絶対値を残しつつ偏差列を追加する
+
+    Returns:
+        (df_out, out_cols)
+        df_out  : 変換後の DataFrame
+        out_cols: モデルに渡す特徴量列名リスト
+    """
+    if mode not in ('replace', 'add'):
+        raise ValueError(f'mode は replace / add のいずれかを指定してください: {mode}')
+
+    df = feat_df.copy()
+    dev_cols = []
+    for col in feat_cols:
+        dev_col = f'{col}_dev'
+        # その年に存在する全圃場の当該特徴量の平均
+        year_mean = df.groupby('year')[col].transform('mean')
+        df[dev_col] = df[col] - year_mean
+        dev_cols.append(dev_col)
+
+    if mode == 'replace':
+        out_cols = dev_cols
+        print(f'  年偏差 (replace): {len(dev_cols)} 列 (絶対値を偏差に置換)')
+    else:  # 'add'
+        out_cols = feat_cols + dev_cols
+        print(f'  年偏差 (add): +{len(dev_cols)} 列 (絶対値 + 偏差 = {len(out_cols)} 列)')
+
+    return df, out_cols
+
+
 # ── Step 5: データセット構築 ──────────────────────────────────────────────────
 
 def build_dataset(field_db: str, weather_db: str, gdd_csv: str,
                   add_harm: bool    = False,
                   add_spacing: bool = False,
                   add_vwc: bool     = False,
-                  add_breed: bool   = False):
+                  add_breed: bool   = False,
+                  year_dev: str     = 'none'):
     """GDD 期間分割に基づく特徴量 X と目的変数 y を構築する。
 
     Args:
@@ -474,9 +518,13 @@ def build_dataset(field_db: str, weather_db: str, gdd_csv: str,
         add_spacing : between_lines / between_stocks を追加。
         add_vwc     : VWC_mean / has_vwc を追加。
         add_breed   : 品種 (breed) ワンホットを追加。
+        year_dev    : 気象特徴量の年偏差変換モード。
+                      'none'    → 変換なし（デフォルト）
+                      'replace' → 絶対値を偏差に置換 (LOYO 推奨)
+                      'add'     → 絶対値に加えて偏差列も追加
 
     Returns:
-        X    (N, 135 [+5] [+2] [+2] [+B])  特徴量行列
+        X    (N, F)  特徴量行列
         y    (N,)
         geo  (N, 2)
         meta DataFrame
@@ -512,12 +560,19 @@ def build_dataset(field_db: str, weather_db: str, gdd_csv: str,
     print('GDD期間別気象特徴量計算...')
     feat_df = build_gdd_features(gdd_df, weather_df)
     # 135 特徴量列名 (var_p{p}_{stat})
-    feat_cols = [
+    gdd_feat_cols = [
         f'{var}_p{p}_{stat}'
         for p in [1, 2, 3]
         for var in WEATHER_COLS
         for stat in STAT_FUNCS
     ]
+
+    # ── 年偏差変換（任意） ────────────────────────────────────────────────
+    if year_dev in ('replace', 'add'):
+        print(f'年偏差特徴量計算 (mode={year_dev})...')
+        feat_df, feat_cols = compute_year_deviation(feat_df, gdd_feat_cols, mode=year_dev)
+    else:
+        feat_cols = gdd_feat_cols
 
     # ── 結合: 収量 + 特徴量 ───────────────────────────────────────────────
     merged = quest_df.merge(feat_df, on=['field_id', 'year'], how='inner')
@@ -837,6 +892,10 @@ def main(args):
         print(f'  VWC       : {VWC_COLS}  (SolidMoisture: field/year-mean imputation)')
     if args.add_breed:
         print(f'  Breed     : one-hot  (rare<{BREED_MIN_COUNT} -> rare, None -> unknown, first if comma-sep)')
+    if args.year_dev != 'none':
+        mode_desc = {'replace': '絶対値を偏差に置換 → 135 dev 列',
+                     'add':     '絶対値 + 偏差 → 270 列'}
+        print(f'  年偏差    : mode={args.year_dev}  {mode_desc.get(args.year_dev, "")}')
     print('=' * 65)
 
     # データセット構築
@@ -845,7 +904,8 @@ def main(args):
         add_harm=args.add_harm,
         add_spacing=args.add_spacing,
         add_vwc=args.add_vwc,
-        add_breed=args.add_breed
+        add_breed=args.add_breed,
+        year_dev=args.year_dev
     )
 
     # ── IQR 外れ値除去 ───────────────────────────────────────────────────
@@ -897,6 +957,12 @@ def parse_args():
                    help='SolidMoisture VWC を追加 (VWC_mean + has_vwc; 2015は別年平均で補完)')
     p.add_argument('--add-breed', action='store_true', dest='add_breed',
                    help='breed (品種) をワンホット特徴量として追加')
+    p.add_argument('--year-dev', choices=['none', 'replace', 'add'], default='none',
+                   dest='year_dev',
+                   help=('気象特徴量の年偏差変換\n'
+                         '  none    : 変換なし（デフォルト）\n'
+                         '  replace : 絶対値を年内偏差に置換 (LOYO 向け推奨)\n'
+                         '  add     : 絶対値＋偏差を両方追加（270 列）'))
     p.add_argument('--iqr', action='store_true', help='IQR 外れ値除去を適用')
     p.add_argument('--weather-db', default=WEATHER_DB, dest='weather_db')
     p.add_argument('--field-db',   default=FIELD_DB,   dest='field_db')
