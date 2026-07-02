@@ -94,6 +94,10 @@ SPACING_FILL = {'between_lines': 75.0, 'between_stocks': 18.0}
 # has_vwc   : VWCセンサーが設置されていた場合 1，ない場合 0
 VWC_COLS = ['VWC_mean', 'has_vwc']
 
+# 品种ワンホット特徴量 (Questionaire.breed)
+# 出現件数がこれ未満の品種は 'rare' にまとめる
+BREED_MIN_COUNT = 4
+
 # ベースライン固定ハイパーパラメータ
 RIDGE_ALPHA       = 100
 LGBM_N_ESTIMATORS = 200
@@ -341,6 +345,63 @@ def load_vwc(field_db: str) -> pd.DataFrame:
     return qst[['field_id', 'year'] + VWC_COLS].reset_index(drop=True)
 
 
+# ── 品種特徴量: breed ワンホット ───────────────────────────────────────────
+
+def load_breed(field_db: str) -> pd.DataFrame:
+    """Questionaire テーブルから breed を取得し、ワンホット特徴量に変換する。
+
+    変換ルール:
+      - None / 空文字  → 'unknown'
+      - カンマ区切り（複数品種） → 最初の品種のみ使用
+      - 出現 {BREED_MIN_COUNT} 件未満の品種 → 'rare' にまとめる
+      - ワンホット化（ドロップ最初 = True）
+
+    注意:
+      全サンプルで get_dummies してから返すため、kfold/loyo ともカラム数が一致する。
+
+    Returns:
+        DataFrame: field_id, year, breed_<品種名> ... (ワンホット列群)
+    """
+    conn = sqlite3.connect(field_db)
+    df = pd.read_sql('''
+        SELECT CAST(field_id AS INTEGER) AS field_id, year, breed
+        FROM Questionaire
+        WHERE field_id IS NOT NULL AND yield IS NOT NULL
+          AND year BETWEEN 2015 AND 2018
+    ''', conn)
+    conn.close()
+
+    df['field_id'] = df['field_id'].astype(int)
+    df['year']     = df['year'].astype(int)
+
+    # --- 正規化 ---
+    # None ・空文字 → 'unknown'
+    df['breed'] = df['breed'].astype(str).str.strip()
+    df['breed'] = df['breed'].replace({'None': 'unknown', 'nan': 'unknown', '': 'unknown'})
+
+    # カンマ区切りの複数品種 → 最初の品種のみ使用
+    df['breed'] = df['breed'].str.split(',').str[0].str.strip()
+
+    # 出現件数が BREED_MIN_COUNT 未満 → 'rare'
+    counts = df['breed'].value_counts()
+    rare_breeds = counts[counts < BREED_MIN_COUNT].index
+    df.loc[df['breed'].isin(rare_breeds), 'breed'] = 'rare'
+
+    n_breeds = df['breed'].nunique()
+    print(f'  品種ワンホット: {n_breeds} カテゴリ (少数<{BREED_MIN_COUNT}件は rare に統合)')
+    print(f'  品種一覧: {sorted(df["breed"].unique())}')
+
+    # --- one-hot 化 ---
+    dummies = pd.get_dummies(df['breed'], prefix='breed', drop_first=True)
+    result  = pd.concat([df[['field_id', 'year']], dummies], axis=1)
+
+    # bool → int
+    bool_cols = result.select_dtypes(include='bool').columns
+    result[bool_cols] = result[bool_cols].astype(int)
+
+    return result.reset_index(drop=True)
+
+
 # ── Step 4: GDD期間ごとの気象特徴量を構築 ────────────────────────────────────
 
 def build_gdd_features(gdd_df: pd.DataFrame, weather_df: pd.DataFrame) -> pd.DataFrame:
@@ -402,20 +463,22 @@ def build_gdd_features(gdd_df: pd.DataFrame, weather_df: pd.DataFrame) -> pd.Dat
 # ── Step 5: データセット構築 ──────────────────────────────────────────────────
 
 def build_dataset(field_db: str, weather_db: str, gdd_csv: str,
-                  add_harm: bool = False,
+                  add_harm: bool    = False,
                   add_spacing: bool = False,
-                  add_vwc: bool = False):
+                  add_vwc: bool     = False,
+                  add_breed: bool   = False):
     """GDD 期間分割に基づく特徴量 X と目的変数 y を構築する。
 
     Args:
-        add_harm    : True のとき Harm テーブルの 5 変数を追加する。
-        add_spacing : True のとき between_lines / between_stocks を追加する。
-        add_vwc     : True のとき VWC_mean / has_vwc を追加する。
+        add_harm    : Harm テーブルの 5 変数を追加。
+        add_spacing : between_lines / between_stocks を追加。
+        add_vwc     : VWC_mean / has_vwc を追加。
+        add_breed   : 品種 (breed) ワンホットを追加。
 
     Returns:
-        X    (N, 135 [+5] [+2] [+2])  特徴量行列
-        y    (N,)                     収量
-        geo  (N, 2)                   lat, lon
+        X    (N, 135 [+5] [+2] [+2] [+B])  特徴量行列
+        y    (N,)
+        geo  (N, 2)
         meta DataFrame
         feat_cols list
     """
@@ -501,6 +564,17 @@ def build_dataset(field_db: str, weather_db: str, gdd_csv: str,
                               on=['field_id', 'year'], how='left')
         all_feat_cols = all_feat_cols + VWC_COLS
         print(f'  VWC 追加後サンプル数: {len(merged)}  特徴量次元: {len(all_feat_cols)}')
+
+    if add_breed:
+        print('品種ワンホット特徴量読み込み...')
+        breed_df   = load_breed(field_db)
+        breed_cols = [c for c in breed_df.columns if c.startswith('breed_')]
+        merged = merged.merge(breed_df[['field_id', 'year'] + breed_cols],
+                              on=['field_id', 'year'], how='left')
+        # マージ後に欠損が入る可能性あり（原理上ないはず） → 0 埋め
+        merged[breed_cols] = merged[breed_cols].fillna(0).astype(int)
+        all_feat_cols = all_feat_cols + breed_cols
+        print(f'  breed 追加後サンプル数: {len(merged)}  特徴量次元: {len(all_feat_cols)}')
 
     X   = merged[all_feat_cols].to_numpy(dtype=np.float32)
     y   = merged['yield'].to_numpy(dtype=np.float32)
@@ -761,6 +835,8 @@ def main(args):
         print(f'  Spacing   : {SPACING_COLS}  (between_lines->75, between_stocks->18)')
     if args.add_vwc:
         print(f'  VWC       : {VWC_COLS}  (SolidMoisture: field/year-mean imputation)')
+    if args.add_breed:
+        print(f'  Breed     : one-hot  (rare<{BREED_MIN_COUNT} -> rare, None -> unknown, first if comma-sep)')
     print('=' * 65)
 
     # データセット構築
@@ -768,7 +844,8 @@ def main(args):
         args.field_db, args.weather_db, args.gdd_csv,
         add_harm=args.add_harm,
         add_spacing=args.add_spacing,
-        add_vwc=args.add_vwc
+        add_vwc=args.add_vwc,
+        add_breed=args.add_breed
     )
 
     # ── IQR 外れ値除去 ───────────────────────────────────────────────────
@@ -818,6 +895,8 @@ def parse_args():
                    help='between_lines(NaN->75) / between_stocks(non-num/NaN->18) を追加')
     p.add_argument('--add-vwc', action='store_true', dest='add_vwc',
                    help='SolidMoisture VWC を追加 (VWC_mean + has_vwc; 2015は別年平均で補完)')
+    p.add_argument('--add-breed', action='store_true', dest='add_breed',
+                   help='breed (品種) をワンホット特徴量として追加')
     p.add_argument('--iqr', action='store_true', help='IQR 外れ値除去を適用')
     p.add_argument('--weather-db', default=WEATHER_DB, dest='weather_db')
     p.add_argument('--field-db',   default=FIELD_DB,   dest='field_db')
