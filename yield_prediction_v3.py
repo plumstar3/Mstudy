@@ -59,6 +59,7 @@ WEATHER_DB  = os.path.join('data', 'processed', 'weather_database_fieldid.db')
 FIELD_DB    = os.path.join('data', 'processed', 'FieldData_fieldid.db')
 GDD_CSV     = os.path.join('outputs', 'gdd', 'gdd_daily.csv')
 OUTPUT_DIR  = os.path.join('outputs', 'yield_pred_v3')
+PAST_YIELD_CSV = os.path.join('outputs', 'data_analysis', 'past_yield_features_v2.csv')
 
 WEATHER_COLS = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCPRA', 'SSD', 'GSR', 'WIND', 'SWE', 'RH']
 #WEATHER_COLS = ['TMP_mea', 'APCPRA',  'GSR', 'WIND']
@@ -93,6 +94,12 @@ SPACING_FILL = {'between_lines': 75.0, 'between_stocks': 18.0}
 # VWC_mean  : 測定期間全体の平均VWC —— 欠損の場合: 同一field_idの他年平均 → 全体平均
 # has_vwc   : VWCセンサーが設置されていた場合 1，ない場合 0
 VWC_COLS = ['VWC_mean', 'has_vwc']
+
+# 過去収量特徴量 (past_yield_features_v2.csv)
+# past_yield_mean  : 過去年の近接同水準圃場の収量平均
+#                    欠損（距離300m以内の過去記録なし）→ その年の全体平均収量で補完
+# has_past_record  : 実際に過去記録が見つかった場合 1、補完値の場合 0
+PAST_YIELD_COLS = ['past_yield_mean', 'has_past_record']
 
 # 品种ワンホット特徴量 (Questionaire.breed)
 # 出現件数がこれ未満の品種は 'rare' にまとめる
@@ -402,6 +409,50 @@ def load_breed(field_db: str) -> pd.DataFrame:
     return result.reset_index(drop=True)
 
 
+# ── 過去収量特徴量: past_yield_features_v2.csv ─────────────────────────────────
+
+def load_past_yield(past_yield_csv: str, quest_df: pd.DataFrame) -> pd.DataFrame:
+    """past_yield_features_v2.csv を読み込み、過去収量特徴量を返す。
+
+    特徴量:
+      past_yield_mean  : 過去年の近接同水準圃場の収量平均
+                         欠損（過去記録なし）→ その年の全体平均収量で補完
+      has_past_record  : 1 = 実際の過去記録あり、0 = 補完値（年平均）
+
+    補完ロジック:
+      - past_yield_n == 0 の行は past_yield_mean が NaN
+      - その年の quest_df（全サンプル）の収量平均で補完する
+
+    Returns:
+        DataFrame: field_id, year, past_yield_mean, has_past_record
+    """
+    past_df = pd.read_csv(past_yield_csv, encoding='utf-8-sig')
+    past_df['field_id'] = past_df['field_id'].astype(int)
+    past_df['year']     = past_df['year'].astype(int)
+
+    # has_past_record フラグ: past_yield_n > 0 なら 1
+    past_df['has_past_record'] = (past_df['past_yield_n'] > 0).astype(int)
+
+    # 年別の全体平均収量（補完用）を quest_df から計算
+    year_mean_yield = quest_df.groupby('year')['yield'].mean().to_dict()
+
+    # past_yield_mean が NaN の行（過去記録なし）→ その年の全体平均で補完
+    n_missing = past_df['past_yield_mean'].isna().sum()
+    past_df['past_yield_mean'] = past_df.apply(
+        lambda r: year_mean_yield.get(int(r['year']), np.nan)
+        if pd.isna(r['past_yield_mean']) else r['past_yield_mean'],
+        axis=1
+    )
+
+    print(f'  過去収量特徴量:')
+    print(f'    has_past_record=1 (実記録あり) : {past_df["has_past_record"].sum()} 件')
+    print(f'    has_past_record=0 (年平均補完) : {(past_df["has_past_record"]==0).sum()} 件')
+    print(f'    past_yield_mean 欠損 → 年平均補完: {n_missing} 件')
+    print(f'    年別補完値: { {yr: f"{m:.1f}" for yr, m in year_mean_yield.items()} }')
+
+    return past_df[['field_id', 'year'] + PAST_YIELD_COLS].reset_index(drop=True)
+
+
 # ── Step 4: GDD期間ごとの気象特徴量を構築 ────────────────────────────────────
 
 def build_gdd_features(gdd_df: pd.DataFrame, weather_df: pd.DataFrame) -> pd.DataFrame:
@@ -506,11 +557,12 @@ def compute_year_deviation(feat_df: pd.DataFrame, feat_cols: list,
 # ── Step 5: データセット構築 ──────────────────────────────────────────────────
 
 def build_dataset(field_db: str, weather_db: str, gdd_csv: str,
-                  add_harm: bool    = False,
-                  add_spacing: bool = False,
-                  add_vwc: bool     = False,
-                  add_breed: bool   = False,
-                  year_dev: str     = 'none'):
+                  add_harm: bool       = False,
+                  add_spacing: bool    = False,
+                  add_vwc: bool        = False,
+                  add_breed: bool      = False,
+                  add_past_yield: bool = False,
+                  year_dev: str        = 'none'):
     """GDD 期間分割に基づく特徴量 X と目的変数 y を構築する。
 
     Args:
@@ -630,6 +682,22 @@ def build_dataset(field_db: str, weather_db: str, gdd_csv: str,
         merged[breed_cols] = merged[breed_cols].fillna(0).astype(int)
         all_feat_cols = all_feat_cols + breed_cols
         print(f'  breed 追加後サンプル数: {len(merged)}  特徴量次元: {len(all_feat_cols)}')
+
+    if add_past_yield:
+        print('過去収量特徴量読み込み...')
+        past_df = load_past_yield(PAST_YIELD_CSV, quest_df)
+        merged  = merged.merge(past_df[['field_id', 'year'] + PAST_YIELD_COLS],
+                               on=['field_id', 'year'], how='left')
+        # マージ後に残存する NaN（quest_df にあるが past_yield_csv にない行）は年平均で埋める
+        year_mean_yield = quest_df.groupby('year')['yield'].mean().to_dict()
+        merged['past_yield_mean'] = merged.apply(
+            lambda r: year_mean_yield.get(int(r['year']), np.nan)
+            if pd.isna(r['past_yield_mean']) else r['past_yield_mean'],
+            axis=1
+        )
+        merged['has_past_record'] = merged['has_past_record'].fillna(0).astype(int)
+        all_feat_cols = all_feat_cols + PAST_YIELD_COLS
+        print(f'  past_yield 追加後サンプル数: {len(merged)}  特徴量次元: {len(all_feat_cols)}')
 
     X   = merged[all_feat_cols].to_numpy(dtype=np.float32)
     y   = merged['yield'].to_numpy(dtype=np.float32)
@@ -892,6 +960,8 @@ def main(args):
         print(f'  VWC       : {VWC_COLS}  (SolidMoisture: field/year-mean imputation)')
     if args.add_breed:
         print(f'  Breed     : one-hot  (rare<{BREED_MIN_COUNT} -> rare, None -> unknown, first if comma-sep)')
+    if args.add_past_yield:
+        print(f'  PastYield : {PAST_YIELD_COLS}  (past_yield_features_v2.csv / 欠損->年平均)')
     if args.year_dev != 'none':
         mode_desc = {'replace': '絶対値を偏差に置換 → 135 dev 列',
                      'add':     '絶対値 + 偏差 → 270 列'}
@@ -905,6 +975,7 @@ def main(args):
         add_spacing=args.add_spacing,
         add_vwc=args.add_vwc,
         add_breed=args.add_breed,
+        add_past_yield=args.add_past_yield,
         year_dev=args.year_dev
     )
 
@@ -957,6 +1028,10 @@ def parse_args():
                    help='SolidMoisture VWC を追加 (VWC_mean + has_vwc; 2015は別年平均で補完)')
     p.add_argument('--add-breed', action='store_true', dest='add_breed',
                    help='breed (品種) をワンホット特徴量として追加')
+    p.add_argument('--add-past-yield', action='store_true', dest='add_past_yield',
+                   help=('past_yield_features_v2.csv から過去収量特徴量を追加\n'
+                         '  past_yield_mean  : 近接同水準圃場の収量平均 (欠損->年平均)\n'
+                         '  has_past_record  : 実記録あり=1 / 年平均補完=0'))
     p.add_argument('--year-dev', choices=['none', 'replace', 'add'], default='none',
                    dest='year_dev',
                    help=('気象特徴量の年偏差変換\n'
