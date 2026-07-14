@@ -1,15 +1,15 @@
 """
 eval_past_yield_subset.py
 ================================================================
-【目的】
+[目的]
   past_yield_features_v2.csv で過去記録が実際に紐づいた
-  88件のサンプルに限定して、
+  サンプルに限定して、
 
     (A) ベースライン: 気象135特徴量のみ
-    (B) 過去収量あり: 気象135 + past_yield_mean
+    (B) 過去情報あり: 気象135 + past_yield_mean + 過去気象135 + 過去病刷5
 
   の LOYO (Leave-One-Year-Out) 精度を比較し、
-  過去収量特徴量の「88件における真の有効性」を評価する。
+  過去情報特徴量の「真の有効性」を評価する。
 """
 
 import os, sqlite3, warnings
@@ -43,16 +43,28 @@ PAST_YIELD_CSV = os.path.join('outputs', 'data_analysis', 'past_yield_features_v
 OUT_DIR        = os.path.join('outputs', 'yield_pred_v3')
 os.makedirs(OUT_DIR, exist_ok=True)
 
-WEATHER_COLS   = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCPRA', 'SSD', 'GSR', 'WIND', 'SWE', 'RH']
-STAT_FUNCS     = ['mean', 'std', 'min', 'max', 'median']
+WEATHER_COLS     = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCPRA', 'SSD', 'GSR', 'WIND', 'SWE', 'RH']
+# 変数ごとに取る統計量を限定（135次元 → 39次元に削減）
+WEATHER_STAT_MAP = {
+    'TMP_mea': ['mean'],
+    'TMP_max': ['mean', 'max'],
+    'TMP_min': ['mean', 'min'],
+    'APCPRA':  ['mean', 'max'],
+    'SSD':     ['mean'],
+    'GSR':     ['mean'],
+    'WIND':    ['mean', 'max'],
+    'SWE':     ['mean'],
+    'RH':      ['mean'],
+}
 GDD_THRESHOLDS = [600, 1000]
 RANDOM_STATE   = 42
 RIDGE_ALPHA    = 100
+HARM_COLS      = ['sick', 'wet', 'typhoon', 'unripen', 'weed']
 
 # ── データ読み込み ─────────────────────────────────────────────────────────────
 print('=' * 60)
-print('  過去記録あり88件限定 LOYO 精度比較')
-print('=' * 60)
+print('  過去記録あり限定 LOYO 精度比較')
+print('='*60)
 
 conn = sqlite3.connect(FIELD_DB)
 quest_df = pd.read_sql('''
@@ -109,32 +121,46 @@ print(f'{len(weather_df):,} 行')
 print('GDD期間別特徴量計算...')
 merged_gdd = gdd_df.merge(weather_df[['field_id','date']+WEATHER_COLS],
                           on=['field_id','date'], how='left')
-grp = (merged_gdd.groupby(['field_id','year','period'])[WEATHER_COLS]
-       .agg(STAT_FUNCS))
+agg_dict = {v: stats for v, stats in WEATHER_STAT_MAP.items()}
+grp = merged_gdd.groupby(['field_id','year','period']).agg(agg_dict)
 grp_pivot = grp.unstack('period')
 grp_pivot.columns = [f'{v}_p{int(p)}_{s}' for v,s,p in grp_pivot.columns]
 gdd_feat_cols = [f'{v}_p{p}_{s}'
-                 for p in [1,2,3] for v in WEATHER_COLS for s in STAT_FUNCS]
+                 for p in [1,2,3]
+                 for v, stats in WEATHER_STAT_MAP.items()
+                 for s in stats]
 for col in gdd_feat_cols:
     if col not in grp_pivot.columns:
         grp_pivot[col] = np.nan
 feat_df = grp_pivot[gdd_feat_cols].reset_index()
 
-# 結合
+# GDD期間別気象特徴量列名（WEATHER_STAT_MAPに基づく）
 all_data = quest_df.merge(feat_df, on=['field_id','year'], how='inner')
-all_data = all_data.merge(
-    past_df[['field_id','year','past_yield_mean','has_past_record']],
-    on=['field_id','year'], how='left')
+
+# 過去特徴量列名を定義
+PAST_WX_COLS   = [f'past_{c}' for c in gdd_feat_cols]   # 39列
+PAST_HARM_COLS = [f'past_harm_{c}' for c in HARM_COLS]  # 5列
+PAST_FEAT_COLS = ['past_yield_mean'] + PAST_WX_COLS + PAST_HARM_COLS  # 45列
+
+# 過去特徴量 CSV をマージ
+past_load_cols = ['field_id', 'year', 'has_past_record'] + PAST_FEAT_COLS
+avail_cols = [c for c in past_load_cols if c in past_df.columns]
+all_data = all_data.merge(past_df[avail_cols], on=['field_id','year'], how='left')
 all_data['has_past_record'] = all_data['has_past_record'].fillna(0).astype(int)
 print(f'全データ: {len(all_data)} 件')
 
-# ── 88件のサブセットに絞る ─────────────────────────────────────────────────────
+# ── サブセットに絞る ───────────────────────────────────────────────────
 subset = all_data[all_data['has_past_record'] == 1].reset_index(drop=True)
 print(f'過去記録あり: {len(subset)} 件')
 print(f'年別内訳: {subset.groupby("year").size().to_dict()}')
-print(f'past_yield_mean: min={subset["past_yield_mean"].min():.1f}  '
-      f'max={subset["past_yield_mean"].max():.1f}  '
-      f'mean={subset["past_yield_mean"].mean():.1f}')
+if 'past_yield_mean' in subset.columns:
+    print(f'past_yield_mean: min={subset["past_yield_mean"].min():.1f}  '
+          f'max={subset["past_yield_mean"].max():.1f}  '
+          f'mean={subset["past_yield_mean"].mean():.1f}')
+
+# 有効な過去特徴量列（CSVに実在するもののみ）
+valid_past_cols = [c for c in PAST_FEAT_COLS if c in subset.columns]
+print(f'過去特徴量有効列数: {len(valid_past_cols)} / {len(PAST_FEAT_COLS)}')
 
 # ── モデル定義 ─────────────────────────────────────────────────────────────────
 def make_pipeline(model_obj):
@@ -153,8 +179,16 @@ def run_loyo(X, y, year_arr, label):
     models = {
         'Ridge':    make_pipeline(Ridge(alpha=RIDGE_ALPHA)),
         'LightGBM': make_pipeline(lgb.LGBMRegressor(
-            n_estimators=200, learning_rate=0.05, num_leaves=31,
-            random_state=RANDOM_STATE, n_jobs=-1, verbose=-1)),
+            # ── ランダムサーチ最良設定 (tune_lgbm.py / N_TRIALS=200) ──────
+            num_leaves       = 20,     # 31 → 20（複雑さを抑制）
+            min_child_samples= 15,     # 葉のサンプル数下限（過学習防止）
+            learning_rate    = 0.08,   # 0.05 → 0.08
+            n_estimators     = 100,    # 200 → 100
+            reg_lambda       = 10.0,   # L2正則化（最重要：小サンプル向け）
+            reg_alpha        = 0.0,    # L1正則化
+            subsample        = 1.0,    # 行サブサンプリング
+            colsample_bytree = 0.6,    # 特徴量サブサンプリング
+            random_state     = RANDOM_STATE, n_jobs=-1, verbose=-1)),
     }
 
     print(f'\n  [{label}]  特徴量次元={X.shape[1]}')
@@ -202,16 +236,17 @@ def run_loyo(X, y, year_arr, label):
 
 
 X_base   = subset[gdd_feat_cols].to_numpy(dtype=np.float32)
-X_with   = subset[gdd_feat_cols + ['past_yield_mean']].to_numpy(dtype=np.float32)
+X_with   = subset[gdd_feat_cols + valid_past_cols].to_numpy(dtype=np.float32)
 y        = subset['yield'].to_numpy(dtype=np.float32)
 year_arr = subset['year'].to_numpy(dtype=int)
 
 print('\n' + '='*60)
-print('  LOYO 比較（88件限定 / Leave-One-Year-Out）')
+print('  LOYO 比較（限定 / Leave-One-Year-Out）')
 print('  テスト年: 2016, 2017, 2018')
 print('='*60)
 sum_base, preds_base = run_loyo(X_base, y, year_arr, 'ベースライン（気象のみ）')
-sum_with, preds_with = run_loyo(X_with, y, year_arr, '+ past_yield_mean')
+with_label = f'+ past情報({len(valid_past_cols)}列: yield+気象135+病刷5)'
+sum_with, preds_with = run_loyo(X_with, y, year_arr, with_label)
 
 # ── 改善量まとめ ──────────────────────────────────────────────────────────────
 print('\n' + '='*60)
@@ -255,7 +290,7 @@ fig.suptitle('過去記録あり88件限定: LightGBM LOYO 予測値 vs 実測�
 
 configs = [
     (ax_base, preds_base, 'LightGBM', 'ベースライン（気象135のみ）'),
-    (ax_with, preds_with, 'LightGBM', '+ past_yield_mean'),
+    (ax_with, preds_with, 'LightGBM', f'+ past情報({len(valid_past_cols)}列)'),
 ]
 
 for ax, preds, model, label in configs:

@@ -9,10 +9,13 @@ build_past_yield_features.py
 【アルゴリズム（圃場中心アプローチ）】
   予測対象: (fid_t, year_t)
     ①  year_j < year_t  ← 過去年
-    ②  dist(fid_t, fid_j) ≤ DIST_THR (300m)  ← 近接
-    ③  |dev_t - dev_j|  ≤ DEV_THR  (70kg)  ← 収量水準が近い
+    ②  dist(fid_t, fid_j) <= DIST_THR (300m)  ← 近接
+    ③  |候補群の偏差中央値 - dev_j| <= DEV_THR (70kg)  ← 近傍内分布で外れ値除去
+        (対象圃場の収量は一切参照しない: リークなし)
 
-  条件を満たす (fid_j, year_j) を集めてその収量の
+  候補の信頼性要件：候補圃場が 2 件未満の場合は NaN（分布計算不可）
+
+  条件①②を満たす候補の中から外れ値を除いた圃場の収量の
   mean / max / min / std / count を特徴量として出力する。
 
 【Union-Find との違い】
@@ -48,15 +51,31 @@ for _fn in _JP_FONTS:
         break
 plt.rcParams['axes.unicode_minus'] = False
 
-OUT_DIR  = 'outputs/data_analysis'
+OUT_DIR     = 'outputs/data_analysis'
 os.makedirs(OUT_DIR, exist_ok=True)
-FIELD_DB = 'data/processed/FieldData_fieldid.db'
+FIELD_DB    = 'data/processed/FieldData_fieldid.db'
+WEATHER_DB  = 'data/processed/weather_database_fieldid.db'
+GDD_CSV     = 'outputs/gdd/gdd_daily.csv'
 
-DIST_THR = 300   # m
-DEV_THR  = 70    # kg/10a
-YEARS    = [2015, 2016, 2017, 2018]
+DIST_THR       = 300        # m  近接閾値
+YEARS          = [2015, 2016, 2017, 2018]
+WEATHER_COLS     = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCPRA', 'SSD', 'GSR', 'WIND', 'SWE', 'RH']
+# 変数ごとに取る統計量を限定（135次元 → 39次元に削減）
+WEATHER_STAT_MAP = {
+    'TMP_mea': ['mean'],              # 平均気温: 平均のみ
+    'TMP_max': ['mean', 'max'],       # 最高気温: 高温障害のため max も保持
+    'TMP_min': ['mean', 'min'],       # 最低気温: 冷害・霜害のため min も保持
+    'APCPRA':  ['mean', 'max'],       # 降水量: 豪雨ダメージのため max も保持
+    'SSD':     ['mean'],              # 日照時間: 平均のみ
+    'GSR':     ['mean'],              # 日射量: 平均のみ
+    'WIND':    ['mean', 'max'],       # 風速: 台風・倒伏のため max も保持
+    'SWE':     ['mean'],              # 積雪相当水量: 平均のみ
+    'RH':      ['mean'],              # 湿度: 平均のみ
+}
+GDD_THRESHOLDS = [600, 1000]
+HARM_COLS      = ['sick', 'wet', 'typhoon', 'unripen', 'weed']
 
-# ── データ読み込み ─────────────────────────────────────────────────────────────
+# ── 収量・位置データ読み込み ────────────────────────────────────────────────────
 conn = sqlite3.connect(FIELD_DB)
 df = pd.read_sql('''SELECT field_id, year, yield, lat, lon
     FROM Questionaire
@@ -79,12 +98,78 @@ print('年別平均収量:')
 for yr, m in year_means.items():
     print(f'  {yr}年: {m:.1f} kg/10a')
 
-lats_a  = df['lat'].values
-lons_a  = df['lon'].values
-years_a = df['year'].values
-devs_a  = df['yield_dev'].values
-fids_a  = df['field_id'].values
-N       = len(df)
+# ── GDD 期間ラベル ─────────────────────────────────────────────────────────────
+print('GDD 読み込み...', end=' ')
+gdd_df = pd.read_csv(GDD_CSV, encoding='utf-8-sig')
+gdd_df['date'] = pd.to_datetime(gdd_df['date'])
+cum_col = [c for c in gdd_df.columns if 'GDD' in c or 'gdd' in c.lower()][-1]
+th1, th2 = GDD_THRESHOLDS
+gdd_df['period'] = 1
+gdd_df.loc[gdd_df[cum_col] > th1, 'period'] = 2
+gdd_df.loc[gdd_df[cum_col] > th2, 'period'] = 3
+gdd_df = gdd_df[['field_id', 'year', 'date', 'period']]
+print(f'{len(gdd_df):,} 行')
+
+# ── 気象データ読み込み（全 field_id 対象）─────────────────────────────────────
+fids  = sorted(df['field_id'].unique().tolist())
+print(f'気象データ読み込み ({len(fids)} 圃場)...', end=' ')
+conn_w = sqlite3.connect(WEATHER_DB)
+fid_ph  = ','.join(['?'] * len(fids))
+yr_ph   = ','.join(f"'{y}'" for y in YEARS)
+col_str = ', '.join(WEATHER_COLS)
+weather_df = pd.read_sql(f'''
+    SELECT field_id, date, {col_str} FROM weather_data
+    WHERE field_id IN ({fid_ph})
+      AND CAST(SUBSTR(date,1,4) AS INTEGER) IN ({yr_ph})
+    ORDER BY field_id, date''', conn_w, params=fids)
+conn_w.close()
+weather_df['field_id'] = weather_df['field_id'].astype(int)
+weather_df['date']     = pd.to_datetime(weather_df['date'])
+print(f'{len(weather_df):,} 行')
+
+# ── GDD 期間別気象特徴量（全 field_id × year）────────────────────────────────
+print('GDD期間別特徴量計算...')
+merged_gdd = gdd_df.merge(weather_df[['field_id', 'date'] + WEATHER_COLS],
+                          on=['field_id', 'date'], how='left')
+agg_dict = {v: stats for v, stats in WEATHER_STAT_MAP.items()}
+grp = merged_gdd.groupby(['field_id', 'year', 'period']).agg(agg_dict)
+grp_pivot = grp.unstack('period')
+grp_pivot.columns = [f'{v}_p{int(p)}_{s}' for v, s, p in grp_pivot.columns]
+gdd_feat_cols = [f'{v}_p{p}_{s}'
+                 for p in [1, 2, 3]
+                 for v, stats in WEATHER_STAT_MAP.items()
+                 for s in stats]
+for col in gdd_feat_cols:
+    if col not in grp_pivot.columns:
+        grp_pivot[col] = np.nan
+feat_gdd = grp_pivot[gdd_feat_cols].reset_index()
+print(f'  気象特徴量次元: {len(gdd_feat_cols)}')
+
+# ── 病害データ読み込み ─────────────────────────────────────────────────────────
+print('病害データ読み込み...')
+conn = sqlite3.connect(FIELD_DB)
+harm_df = pd.read_sql(
+    f"SELECT field_id, year, {', '.join(HARM_COLS)} FROM Harm "
+    "WHERE field_id IS NOT NULL", conn)
+conn.close()
+harm_df['field_id'] = harm_df['field_id'].astype(int)
+harm_df['year']     = harm_df['year'].astype(int)
+for c in HARM_COLS:
+    harm_df[c] = pd.to_numeric(harm_df[c], errors='coerce')
+print(f'  病害データ: {len(harm_df)} 件')
+
+# ── df に特徴量をマージして行列化 ─────────────────────────────────────────────
+df = df.merge(feat_gdd, on=['field_id', 'year'], how='left')
+df = df.merge(harm_df,  on=['field_id', 'year'], how='left')
+
+# 高速参照用の numpy 配列
+lats_a       = df['lat'].values
+lons_a       = df['lon'].values
+years_a      = df['year'].values
+fids_a       = df['field_id'].values
+N            = len(df)
+weather_mat  = df[gdd_feat_cols].to_numpy(dtype=np.float64)   # (N, 135)
+harm_mat     = df[HARM_COLS].to_numpy(dtype=np.float64)        # (N, 5)
 
 # ── Haversine 距離行列 ─────────────────────────────────────────────────────────
 print('\n距離行列を計算中...')
@@ -98,65 +183,79 @@ def haversine_matrix(la, lo):
 
 D = haversine_matrix(lats_a, lons_a)
 
+# ── 出力列名定義 ─────────────────────────────────────────────────────────────
+PAST_WX_COLS   = [f'past_{c}' for c in gdd_feat_cols]
+PAST_HARM_COLS = [f'past_harm_{c}' for c in HARM_COLS]
+
 # ── 圃場中心アプローチ：各 (fid_t, year_t) の過去記録を検索 ─────────────────
-print('各圃場の過去記録を検索中...')
+# 条件①: year_j < year_t  （全過去年）
+# 条件②: dist <= DIST_THR （近接 300m）
+# 条件③なし
+# 出力: past_yield_mean / past気象135特徴量 / past病害5特徴量
+print('各圃場の過去記録を検索中... [全過去年 × 距離300m]')
+
+def nan_row_wx():
+    return {c: np.nan for c in PAST_WX_COLS}
+
+def nan_row_harm():
+    return {c: np.nan for c in PAST_HARM_COLS}
 
 feature_rows = []
 
 for t_idx in range(N):
     fid_t  = int(fids_a[t_idx])
     year_t = int(years_a[t_idx])
-    dev_t  = devs_a[t_idx]
 
-    # 条件①②③を同時に評価
-    # ①  year_j < year_t
-    # ②  dist ≤ DIST_THR
-    # ③  |dev_t - dev_j| ≤ DEV_THR
+    # 条件①②
     past_mask = (
-        (years_a < year_t) &                          # ① 過去年
-        (D[t_idx] <= DIST_THR) &                      # ② 距離条件
-        (np.abs(dev_t - devs_a) <= DEV_THR)           # ③ 収量水準条件
+        (years_a < year_t) &           # ① 全過去年
+        (D[t_idx] <= DIST_THR)         # ② 距離条件
     )
-    # 自分自身は除外（念のため）
     past_mask[t_idx] = False
-
     past_indices = np.where(past_mask)[0]
 
+    base = {'field_id': fid_t, 'year': year_t}
+
     if len(past_indices) == 0:
-        feature_rows.append({
-            'field_id'       : fid_t,
-            'year'           : year_t,
-            'past_yield_n'   : 0,
-            'past_yield_mean': np.nan,
-            'past_yield_max' : np.nan,
-            'past_yield_min' : np.nan,
-            'past_yield_std' : np.nan,
-            'past_dev_mean'  : np.nan,
-            'past_fids'      : '',
-        })
+        row = {**base,
+               'past_yield_n': 0, 'past_yield_mean': np.nan,
+               'past_yield_max': np.nan, 'past_yield_min': np.nan,
+               'past_yield_std': np.nan, 'past_dev_mean': np.nan,
+               'past_fids': '',
+               **nan_row_wx(), **nan_row_harm()}
     else:
         past_yields = df.iloc[past_indices]['yield'].values
         past_devs   = df.iloc[past_indices]['yield_dev'].values
-        past_fids   = sorted(set(fids_a[j] for j in past_indices))
+        past_fids_l = sorted(set(int(fids_a[j]) for j in past_indices))
 
-        feature_rows.append({
-            'field_id'       : fid_t,
-            'year'           : year_t,
-            'past_yield_n'   : len(past_indices),
-            'past_yield_mean': round(float(np.mean(past_yields)), 1),
-            'past_yield_max' : round(float(np.max(past_yields)), 1),
-            'past_yield_min' : round(float(np.min(past_yields)), 1),
-            'past_yield_std' : round(float(np.std(past_yields)), 1),
-            'past_dev_mean'  : round(float(np.mean(past_devs)), 1),
-            'past_fids'      : ','.join(str(f) for f in past_fids),
-        })
+        # 過去候補の気象特徴量平均
+        past_wx   = np.nanmean(weather_mat[past_indices], axis=0)  # (135,)
+        # 過去候補の病害特徴量平均
+        past_harm = np.nanmean(harm_mat[past_indices],   axis=0)   # (5,)
+
+        wx_dict   = {c: (round(float(v), 4) if not np.isnan(v) else np.nan)
+                     for c, v in zip(PAST_WX_COLS, past_wx)}
+        harm_dict = {c: (round(float(v), 4) if not np.isnan(v) else np.nan)
+                     for c, v in zip(PAST_HARM_COLS, past_harm)}
+
+        row = {**base,
+               'past_yield_n'   : len(past_indices),
+               'past_yield_mean': round(float(np.mean(past_yields)), 1),
+               'past_yield_max' : round(float(np.max(past_yields)), 1),
+               'past_yield_min' : round(float(np.min(past_yields)), 1),
+               'past_yield_std' : round(float(np.std(past_yields)), 1) if len(past_indices) > 1 else 0.0,
+               'past_dev_mean'  : round(float(np.mean(past_devs)), 1),
+               'past_fids'      : ','.join(str(f) for f in past_fids_l),
+               **wx_dict, **harm_dict}
+
+    feature_rows.append(row)
 
 feat_df = pd.DataFrame(feature_rows)
 feat_df.to_csv(f'{OUT_DIR}/past_yield_features_v2.csv', index=False, encoding='utf-8-sig')
 
 # ── 結果サマリ ─────────────────────────────────────────────────────────────────
 has_past = feat_df[feat_df['past_yield_n'] > 0]
-print(f'\n【結果】')
+print(f'\n【結果】全過去年 × 距離{DIST_THR}m 以内 / 過去気象135 + 病害5特徴量')
 print(f'  全サンプル: {len(feat_df)}')
 print(f'  過去記録あり: {len(has_past)} ({100*len(has_past)/len(feat_df):.1f}%)')
 print(f'  過去記録なし: {len(feat_df)-len(has_past)}')
@@ -170,6 +269,9 @@ for yr in YEARS:
           f'（1件あたり平均 {n_mean:.1f} 過去圃場）')
 
 print(f'\n  CSV: {OUT_DIR}/past_yield_features_v2.csv')
+print(f'  総列数: {len(feat_df.columns)} 列（yield+気象{len(PAST_WX_COLS)}+病害{len(PAST_HARM_COLS)}）')
+
+
 
 # ── 可視化: 拡大エリアで Union-Find vs 圃場中心の比較 ──────────────────────────
 # 先ほどの密集エリアで「どの圃場が過去記録として採用されたか」を示す
@@ -178,7 +280,7 @@ TARGET_FIDS = [509, 522, 525, 527, 528, 531, 534, 535, 538, 541]  # 2017年
 TARGET_YEAR = 2017
 
 print(f'\n【{TARGET_YEAR}年ターゲット圃場ごとの過去記録】')
-print(f'  (距離<={DIST_THR}m / 偏差差<={DEV_THR}kg)')
+print(f'  (距離<={DIST_THR}m / 収量水準条件なし)')
 print(f'  {"field_id":>10} | {"dev_t":>7} | {"past_n":>6} | past_fids (dev_j)')
 
 # 過去圃場のdevも表示
@@ -381,7 +483,7 @@ for row in range(1, len(rows_data)):
 
 ax_tbl.set_title(
     f'各2017年圃場の「過去記録」対応表\n'
-    f'（距離≤{DIST_THR}m かつ |偏差差|≤{DEV_THR}kg）',
+    f'（距離<={DIST_THR}m / 収量水準条件なし）',
     fontsize=12, fontweight='bold', pad=15
 )
 
