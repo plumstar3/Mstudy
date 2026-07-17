@@ -43,16 +43,28 @@ PAST_YIELD_CSV = os.path.join('outputs', 'data_analysis', 'past_yield_features_v
 OUT_DIR        = os.path.join('outputs', 'yield_pred_v3')
 os.makedirs(OUT_DIR, exist_ok=True)
 
+#WEATHER_COLS     = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCPRA', 'SSD', 'GSR', 'WIND', 'SWE', 'RH']
 WEATHER_COLS     = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCPRA', 'SSD', 'GSR', 'WIND', 'SWE', 'RH']
 # 変数ごとに取る統計量を限定（135次元 → 39次元に削減）
+# WEATHER_STAT_MAP = {
+#     'TMP_mea': ['mean'],
+#     'TMP_max': ['mean', 'max'],
+#     'TMP_min': ['mean', 'min'],
+#     'APCPRA':  ['mean', 'max'],
+#     'SSD':     ['mean'],
+#     'GSR':     ['mean'],
+#     'WIND':    ['mean', 'max'],
+#     'SWE':     ['mean'],
+#     'RH':      ['mean'],
+# }
 WEATHER_STAT_MAP = {
     'TMP_mea': ['mean'],
-    'TMP_max': ['mean', 'max'],
-    'TMP_min': ['mean', 'min'],
-    'APCPRA':  ['mean', 'max'],
+    'TMP_max': ['mean'],
+    'TMP_min': ['mean'],
+    'APCPRA':  ['mean'],
     'SSD':     ['mean'],
     'GSR':     ['mean'],
-    'WIND':    ['mean', 'max'],
+    'WIND':    ['mean'],
     'SWE':     ['mean'],
     'RH':      ['mean'],
 }
@@ -235,99 +247,103 @@ def run_loyo(X, y, year_arr, label):
     return summary, all_preds
 
 
-X_base   = subset[gdd_feat_cols].to_numpy(dtype=np.float32)
-X_with   = subset[gdd_feat_cols + valid_past_cols].to_numpy(dtype=np.float32)
 y        = subset['yield'].to_numpy(dtype=np.float32)
 year_arr = subset['year'].to_numpy(dtype=int)
 
-print('\n' + '='*60)
-print('  LOYO 比較（限定 / Leave-One-Year-Out）')
-print('  テスト年: 2016, 2017, 2018')
-print('='*60)
-sum_base, preds_base = run_loyo(X_base, y, year_arr, 'ベースライン（気象のみ）')
-with_label = f'+ past情報({len(valid_past_cols)}列: yield+気象135+病刷5)'
-sum_with, preds_with = run_loyo(X_with, y, year_arr, with_label)
+# 有効な past列をグループ別に定義
+past_wx_valid   = [c for c in PAST_WX_COLS   if c in subset.columns]
+past_harm_valid = [c for c in PAST_HARM_COLS if c in subset.columns]
 
-# ── 改善量まとめ ──────────────────────────────────────────────────────────────
-print('\n' + '='*60)
-print('  改善量サマリ（88件限定 LOYO / プール計算）')
-print('='*60)
-print(f'  {"モデル":<10} {"ベースRMSE":>12} {"追加後RMSE":>12} {"RMSE改善":>10} '
-      f'{"ベースMAPE":>11} {"追加後MAPE":>11} {"MAPE改善":>10} '
-      f'{"ベースR2":>10} {"追加後R2":>10}')
-for name in ['Ridge', 'LightGBM']:
-    rb   = sum_base[name]['RMSE']
-    ra   = sum_with[name]['RMSE']
-    mpb  = sum_base[name]['MAPE']
-    mpa  = sum_with[name]['MAPE']
-    r2b  = sum_base[name]['R2']
-    r2a  = sum_with[name]['R2']
-    print(f'  {name:<10} {rb:>12.3f} {ra:>12.3f} {rb-ra:>+10.3f} '
-          f'{mpb:>10.2f}% {mpa:>10.2f}% {mpb-mpa:>+9.2f}% '
-          f'{r2b:>10.4f} {r2a:>10.4f}')
-
-print('\n  年別詳細（プール計算のため参考値）:')
-for name in ['Ridge', 'LightGBM']:
-    print(f'  [{name}]')
-    base_by_yr = {d['year']: d for d in sum_base[name]['per_year']}
-    with_by_yr = {d['year']: d for d in sum_with[name]['per_year']}
-    for yr in sorted(base_by_yr.keys()):
-        b = base_by_yr[yr]
-        w = with_by_yr.get(yr, {})
-        print(f'    {yr}年 (n={b["n_val"]:2d})  '
-              f'BASE RMSE={b["RMSE"]:7.2f} MAPE={b["MAPE"]:6.2f}% R2={b["R2"]:6.4f}  '
-              f'WITH RMSE={w.get("RMSE", float("nan")):7.2f} '
-              f'MAPE={w.get("MAPE", float("nan")):6.2f}% '
-              f'R2={w.get("R2", float("nan")):6.4f}  '
-              f'RMSE改善={b["RMSE"]-w.get("RMSE", b["RMSE"]):+.2f}')
-
-# ── 散布図（LightGBM のみ・年別色分け）─────────────────────────────────────────
-YEAR_COLORS = {2016: '#e74c3c', 2017: '#2980b9', 2018: '#27ae60'}
-
-fig, (ax_base, ax_with) = plt.subplots(1, 2, figsize=(14, 6), facecolor='#f8f9fa')
-fig.suptitle('過去記録あり88件限定: LightGBM LOYO 予測値 vs 実測値\nベースライン vs 過去収量追加（色=テスト年）',
-             fontsize=13, fontweight='bold', y=1.01)
-
-configs = [
-    (ax_base, preds_base, 'LightGBM', 'ベースライン（気象135のみ）'),
-    (ax_with, preds_with, 'LightGBM', f'+ past情報({len(valid_past_cols)}列)'),
+# ── アブレーションスタディ：過去情報の組み合わせを比較 ────────────────────────
+experiments = [
+    ('(A) ベースライン（気象のみ）',     gdd_feat_cols),
+    ('(B) + 過去収量のみ',               gdd_feat_cols + ['past_yield_mean']),
+    ('(C) + 過去収量 + 過去気象',        gdd_feat_cols + ['past_yield_mean'] + past_wx_valid),
+    ('(D) + 過去収量 + 過去病害',        gdd_feat_cols + ['past_yield_mean'] + past_harm_valid),
+    ('(E) + 過去収量 + 過去気象 + 過去病害', gdd_feat_cols + ['past_yield_mean'] + past_wx_valid + past_harm_valid),
 ]
 
-for ax, preds, model, label in configs:
-    yt  = np.array(preds[model]['true'])
-    yp  = np.array(preds[model]['pred'])
-    yrs = np.array(preds[model]['year'])
-    rmse = float(np.sqrt(((yt-yp)**2).mean()))
-    mape = float((np.abs((yt-yp)/yt)).mean() * 100)
-    ss_r = ((yt-yp)**2).sum(); ss_t = ((yt-yt.mean())**2).sum()
-    r2   = float(1-ss_r/ss_t) if ss_t > 0 else float('nan')
+print('\n' + '='*60)
+print('  アブレーションスタディ（過去情報の組み合わせ比較）')
+print(f'  評価方法: LOYO / テスト年: 2016, 2017, 2018 / N={len(subset)}件')
+print('='*60)
+
+all_summaries = {}
+all_preds_map = {}
+
+for label, feat_cols in experiments:
+    X = subset[feat_cols].to_numpy(dtype=np.float32)
+    summary, preds = run_loyo(X, y, year_arr, label)
+    all_summaries[label] = summary
+    all_preds_map[label] = preds
+
+# ── 比較表（LightGBMのみ）────────────────────────────────────────────────────
+print('\n' + '='*60)
+print('  ▼ LightGBM まとめ比較（プール計算）')
+print('='*60)
+print(f'  {"条件":<35} {"次元数":>5} {"RMSE":>8} {"MAPE":>8} {"R2":>8}')
+print('  ' + '-'*68)
+base_label = experiments[0][0]
+for label, feat_cols in experiments:
+    s = all_summaries[label]['LightGBM']
+    dim = len(feat_cols)
+    marker = ' ★' if label == min(all_summaries, key=lambda l: all_summaries[l]['LightGBM']['MAPE']) else ''
+    print(f'  {label:<35} {dim:>5} {s["RMSE"]:>8.2f} {s["MAPE"]:>7.2f}% {s["R2"]:>8.4f}{marker}')
+
+print('\n  ▼ Ridge まとめ比較（プール計算）')
+print(f'  {"条件":<35} {"次元数":>5} {"RMSE":>8} {"MAPE":>8} {"R2":>8}')
+print('  ' + '-'*68)
+for label, feat_cols in experiments:
+    s = all_summaries[label]['Ridge']
+    dim = len(feat_cols)
+    marker = ' ★' if label == min(all_summaries, key=lambda l: all_summaries[l]['Ridge']['MAPE']) else ''
+    print(f'  {label:<35} {dim:>5} {s["RMSE"]:>8.2f} {s["MAPE"]:>7.2f}% {s["R2"]:>8.4f}{marker}')
+
+# ── 散布図（LightGBM / 全5条件）─────────────────────────────────────────────
+YEAR_COLORS = {2016: '#e74c3c', 2017: '#2980b9', 2018: '#27ae60'}
+n_exp = len(experiments)
+fig, axes = plt.subplots(1, n_exp, figsize=(5 * n_exp, 5.5), facecolor='#f8f9fa')
+fig.suptitle(f'LightGBM LOYO 予測 vs 実測（過去情報アブレーション / N={len(subset)}件）',
+             fontsize=13, fontweight='bold', y=1.01)
+
+for ax, (label, feat_cols) in zip(axes, experiments):
+    preds = all_preds_map[label]
+    yt  = np.array(preds['LightGBM']['true'])
+    yp  = np.array(preds['LightGBM']['pred'])
+    yrs = np.array(preds['LightGBM']['year'])
+    rmse = float(np.sqrt(((yt - yp)**2).mean()))
+    mape = float(np.abs((yt - yp) / yt).mean() * 100)
+    ss_r = ((yt - yp)**2).sum(); ss_t = ((yt - yt.mean())**2).sum()
+    r2   = float(1 - ss_r / ss_t) if ss_t > 0 else float('nan')
 
     for yr, col in YEAR_COLORS.items():
         m = yrs == yr
         if m.any():
-            ax.scatter(yt[m], yp[m], alpha=0.8, s=80, c=col,
-                       edgecolors='white', linewidths=0.8, zorder=3,
+            ax.scatter(yt[m], yp[m], alpha=0.8, s=60, c=col,
+                       edgecolors='white', linewidths=0.7, zorder=3,
                        label=f'{yr}年 (n={m.sum()})')
 
     mn = min(yt.min(), yp.min()) - 20
     mx = max(yt.max(), yp.max()) + 20
-    ax.plot([mn,mx],[mn,mx],'--',color='#555555',lw=1.5,zorder=2)
-    ax.set_xlim(mn,mx); ax.set_ylim(mn,mx)
-    ax.set_xlabel('実測収量 (kg/10a)', fontsize=12)
-    ax.set_ylabel('予測収量 (kg/10a)', fontsize=12)
-    ax.set_title(f'LightGBM: {label}', fontsize=12, fontweight='bold')
+    ax.plot([mn, mx], [mn, mx], '--', color='#555555', lw=1.5, zorder=2)
+    ax.set_xlim(mn, mx); ax.set_ylim(mn, mx)
+    ax.set_xlabel('実測収量 (kg/10a)', fontsize=10)
+    ax.set_ylabel('予測収量 (kg/10a)', fontsize=10)
+    ax.set_title(label.replace(' ', '\n', 1), fontsize=9, fontweight='bold')
     ax.text(0.04, 0.96,
-            f'RMSE={rmse:.2f}\nMAPE={mape:.2f}%\nR2={r2:.4f}',
-            transform=ax.transAxes, fontsize=11, va='top',
-            bbox=dict(boxstyle='round,pad=0.4', facecolor='white',
+            f'RMSE={rmse:.1f}\nMAPE={mape:.1f}%\nR2={r2:.3f}',
+            transform=ax.transAxes, fontsize=9, va='top',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
                       alpha=0.87, edgecolor='#cccccc'))
-    ax.legend(fontsize=10, loc='lower right', framealpha=0.85)
+    ax.legend(fontsize=8, loc='lower right', framealpha=0.85)
     ax.grid(True, alpha=0.25); ax.set_facecolor('#fdfdfd')
     ax.set_axisbelow(True)
 
 fig.tight_layout()
-out_path = os.path.join(OUT_DIR, 'eval_past_yield_subset88_loyo.png')
+out_path = os.path.join(OUT_DIR, 'ablation_past_info.png')
 fig.savefig(out_path, dpi=150, bbox_inches='tight')
 plt.close(fig)
 print(f'\n  散布図 → {out_path}')
 print('\n完了')
+
+
