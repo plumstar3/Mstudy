@@ -149,6 +149,29 @@ feat_df = grp_pivot[gdd_feat_cols].reset_index()
 # GDD期間別気象特徴量列名（WEATHER_STAT_MAPに基づく）
 all_data = quest_df.merge(feat_df, on=['field_id','year'], how='inner')
 
+# 当年病害データ（harmテーブル）
+print('当年病害データ読み込み...', end=' ')
+conn_h = sqlite3.connect(FIELD_DB)
+harm_col_str = ', '.join(HARM_COLS)
+harm_df = pd.read_sql(f'''
+    SELECT field_id, year, {harm_col_str} FROM harm
+    WHERE field_id IS NOT NULL
+      AND year BETWEEN 2015 AND 2018''', conn_h)
+conn_h.close()
+harm_df['field_id'] = harm_df['field_id'].astype(int)
+harm_df['year']     = harm_df['year'].astype(int)
+# 'TRUE'/'FALSE' 文字列を 1/0 に変換してから数値化
+for c in HARM_COLS:
+    harm_df[c] = harm_df[c].replace({'TRUE': 1, 'FALSE': 0, 'true': 1, 'false': 0,
+                                     True: 1, False: 0})
+    harm_df[c] = pd.to_numeric(harm_df[c], errors='coerce').fillna(0)
+# 地町ごとに複数行ある場合は合計する
+harm_df = harm_df.groupby(['field_id', 'year'])[HARM_COLS].sum().reset_index()
+print(f'{len(harm_df):,} 行')
+all_data = all_data.merge(harm_df, on=['field_id', 'year'], how='left')
+for c in HARM_COLS:
+    all_data[c] = all_data[c].fillna(0)  # 病害記録なし = 被害なし
+
 # 過去特徴量列名を定義
 PAST_WX_COLS   = [f'past_{c}' for c in gdd_feat_cols]   # 39列
 PAST_HARM_COLS = [f'past_harm_{c}' for c in HARM_COLS]  # 5列
@@ -254,13 +277,13 @@ year_arr = subset['year'].to_numpy(dtype=int)
 past_wx_valid   = [c for c in PAST_WX_COLS   if c in subset.columns]
 past_harm_valid = [c for c in PAST_HARM_COLS if c in subset.columns]
 
-# ── アブレーションスタディ：過去情報の組み合わせを比較 ────────────────────────
+# ── アブレーションスタディ：過去情報の組み合わせを比較 ────────────────
 experiments = [
-    ('(A) ベースライン（気象のみ）',     gdd_feat_cols),
-    ('(B) + 過去収量のみ',               gdd_feat_cols + ['past_yield_mean']),
-    ('(C) + 過去収量 + 過去気象',        gdd_feat_cols + ['past_yield_mean'] + past_wx_valid),
-    ('(D) + 過去収量 + 過去病害',        gdd_feat_cols + ['past_yield_mean'] + past_harm_valid),
-    ('(E) + 過去収量 + 過去気象 + 過去病害', gdd_feat_cols + ['past_yield_mean'] + past_wx_valid + past_harm_valid),
+    ('(A) ベースライン（気象のみ）',         gdd_feat_cols),
+    ('(B) + 当年病害',                      gdd_feat_cols + HARM_COLS),
+    ('(C) + 過去収量のみ',                  gdd_feat_cols + ['past_yield_mean']),
+    ('(D) + 過去収量 + 過去病害',            gdd_feat_cols + ['past_yield_mean'] + past_harm_valid),
+    ('(E) + 過去収量 + 過去病害 + 当年病害',  gdd_feat_cols + ['past_yield_mean'] + past_harm_valid + HARM_COLS),
 ]
 
 print('\n' + '='*60)
