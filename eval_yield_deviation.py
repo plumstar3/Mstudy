@@ -58,7 +58,11 @@ OUT_DIR     = os.path.join('outputs', 'yield_pred_v5')
 os.makedirs(OUT_DIR, exist_ok=True)
 
 WEATHER_COLS   = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCPRA', 'SSD', 'GSR', 'WIND', 'SWE', 'RH']
-HARM_COLS      = ['sick', 'wet', 'typhoon', 'unripen', 'weed']
+# 病害スコア列（1～4の段階評価）: NaNは「未記入」として扱い、LightGBMにNaNのまま渡す
+HARM_SCORE_COLS = ['sick', 'wet', 'unripen', 'weed', 'bug', 'lay', 'loss']
+# 病害フラグ列（TRUE/FALSE）: NaN→被害なし（0）として扱う
+HARM_FLAG_COLS  = ['typhoon', 'long_rain', 'heavy_rain', 'drought', 'gale', 'few_solar']
+HARM_COLS       = HARM_SCORE_COLS + HARM_FLAG_COLS  # 全列（後続利用用）
 GDD_THRESHOLDS = [600, 1000]
 RANDOM_STATE   = 42
 
@@ -224,9 +228,16 @@ all_data = valid_df.merge(feat_df, on=['field_id', 'year'], how='inner')
 print(f'気象結合後: {len(all_data)} 件')
 
 # ── 7b. 当年病害データの読み込みと結合 ──────────────────────────────────────
+# 変数の意味を考慮した正確な変換:
+#   sick  : 1=なかった, 2=あった, 3=不明 → 3はNaN
+#   bug   : 2015年: 1=目立たなかった, 2=目立った, 3=不明 → 3はNaN
+#           2016+年: 1=目立たなかった, 2=ほ場で, 3=収穫物で, 4=不明 → 4はNaN
+#   weed  : 1=なかった, 2=あった（バイナリ、そのままOK）
+#   wet   : 1=なかった, 2=あった（バイナリ、そのままOK）
+#   unripen/lay/loss: 1=無, 2=少, 3=中, 4=多（順序変数、そのままOK）
 print('当年病害データ読み込み...', end=' ', flush=True)
 conn_h = sqlite3.connect(FIELD_DB)
-harm_col_str = ', '.join(HARM_COLS)
+harm_col_str = ', '.join(HARM_SCORE_COLS + HARM_FLAG_COLS)
 harm_df = pd.read_sql(f'''
     SELECT field_id, year, {harm_col_str} FROM harm
     WHERE field_id IS NOT NULL
@@ -234,17 +245,46 @@ harm_df = pd.read_sql(f'''
 conn_h.close()
 harm_df['field_id'] = harm_df['field_id'].astype(int)
 harm_df['year']     = harm_df['year'].astype(int)
-# 'TRUE'/'FALSE' 文字列を 1/0 に変換
-for c in HARM_COLS:
+
+# ── スコア列の数値変換 ────────────────────────────────────────────────────────
+for c in HARM_SCORE_COLS:
+    harm_df[c] = pd.to_numeric(harm_df[c], errors='coerce')
+
+# sick（病害）: 3=不明 → NaN に変換
+harm_df['sick'] = harm_df['sick'].where(harm_df['sick'] != 3, other=np.nan)
+
+# bug（虫害）: 年によってコード体系が異なる
+#   2015年: 3=不明 → NaN
+harm_df.loc[harm_df['year'] == 2015, 'bug'] = (
+    harm_df.loc[harm_df['year'] == 2015, 'bug']
+    .where(harm_df.loc[harm_df['year'] == 2015, 'bug'] != 3, other=np.nan))
+#   2016年以降: 4=不明 → NaN (3=収穫物で目立った は有効な情報として保持)
+harm_df.loc[harm_df['year'] >= 2016, 'bug'] = (
+    harm_df.loc[harm_df['year'] >= 2016, 'bug']
+    .where(harm_df.loc[harm_df['year'] >= 2016, 'bug'] != 4, other=np.nan))
+
+# ── フラグ列: TRUE/FALSE → 1/0 変換（NaN → 被害なし=0）──────────────────────
+for c in HARM_FLAG_COLS:
     harm_df[c] = harm_df[c].replace({'TRUE': 1, 'FALSE': 0, 'true': 1, 'false': 0,
                                      True: 1, False: 0})
-    harm_df[c] = pd.to_numeric(harm_df[c], errors='coerce').fillna(0)
-harm_df = harm_df.groupby(['field_id', 'year'])[HARM_COLS].sum().reset_index()
+    harm_df[c] = pd.to_numeric(harm_df[c], errors='coerce').fillna(0).astype(int)
+
+# ── 圃場×年単位で集計 ─────────────────────────────────────────────────────────
+# フラグ=max（1件でも被害あればTRUE相当）、スコア=mean（平均的な被害度、不明除外済み）
+agg_dict = {c: 'max'  for c in HARM_FLAG_COLS}
+agg_dict.update({c: 'mean' for c in HARM_SCORE_COLS})
+harm_df = harm_df.groupby(['field_id', 'year'])[HARM_SCORE_COLS + HARM_FLAG_COLS].agg(agg_dict).reset_index()
 print(f'{len(harm_df):,} 行')
+
 all_data = all_data.merge(harm_df, on=['field_id', 'year'], how='left')
-for c in HARM_COLS:
-    all_data[c] = all_data[c].fillna(0)  # 記録なし = 被害なし
+
+# ── マージ後のNaN処理 ─────────────────────────────────────────────────────────
+for c in HARM_FLAG_COLS:
+    all_data[c] = all_data[c].fillna(0)   # 記録なし → 被害なし
+# スコア列のNaN（未記入 or 不明）はそのままLightGBMへ（Imputer経由で平均補完）
 print(f'病害結合後: {len(all_data)} 件')
+n_score_nan = {c: int(all_data[c].isna().sum()) for c in HARM_SCORE_COLS}
+print(f'  スコアNaN件数（不明値+未回答）: { {k:v for k,v in n_score_nan.items() if v>0} }')
 
 
 

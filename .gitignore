@@ -6,6 +6,7 @@
 amd/
 venv/
 .venv/
+venv_ndvi/
 
 # ---- 大容量データ・モデル（完全除外） ----
 # 先頭の / でルート直下の data/, outputs/ のみ除外（src/data/ は除外しない）
