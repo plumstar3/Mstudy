@@ -57,11 +57,24 @@ GEOCODE_CSV = os.path.join('outputs', 'reverse_geocode', 'field_Addresses.csv')
 OUT_DIR     = os.path.join('outputs', 'yield_pred_v5')
 os.makedirs(OUT_DIR, exist_ok=True)
 
+# NDVI特徴量CSV（05_extract_ndvi_features.pyで生成）
+NDVI_FEATURES_CSV = os.path.join('data', 'processed', 'ndvi_features_v2.csv')
+USE_NDVI          = True   # False にすると NDVI なしで実行（比較用）
+# NDVI特徴量列（固定DAP点 + 要約統計）
+NDVI_FEAT_COLS = [
+    'ndvi_dap030', 'ndvi_dap045', 'ndvi_dap060', 'ndvi_dap075',
+    'ndvi_dap090', 'ndvi_dap105', 'ndvi_dap120',   # 固定DAP点（主軸）
+    'ndvi_r5r6_mean', 
+    #'auc', 
+    # 'auc_late',           # 要約統計（補助）
+    #'green_up_rate',                               # 立ち上がり速度
+]
+
 WEATHER_COLS   = ['TMP_mea', 'TMP_max', 'TMP_min', 'APCPRA', 'SSD', 'GSR', 'WIND', 'SWE', 'RH']
 # 病害スコア列（1～4の段階評価）: NaNは「未記入」として扱い、LightGBMにNaNのまま渡す
-HARM_SCORE_COLS = ['sick', 'wet', 'unripen', 'weed', 'bug', 'lay', 'loss']
+HARM_SCORE_COLS = ['sick', 'wet', 'unripen', 'weed']   # 病害・湿害・青立ち・雑草害
 # 病害フラグ列（TRUE/FALSE）: NaN→被害なし（0）として扱う
-HARM_FLAG_COLS  = ['typhoon', 'long_rain', 'heavy_rain', 'drought', 'gale', 'few_solar']
+HARM_FLAG_COLS  = ['typhoon']                           # 台風
 HARM_COLS       = HARM_SCORE_COLS + HARM_FLAG_COLS  # 全列（後続利用用）
 GDD_THRESHOLDS = [600, 1000]
 RANDOM_STATE   = 42
@@ -253,15 +266,7 @@ for c in HARM_SCORE_COLS:
 # sick（病害）: 3=不明 → NaN に変換
 harm_df['sick'] = harm_df['sick'].where(harm_df['sick'] != 3, other=np.nan)
 
-# bug（虫害）: 年によってコード体系が異なる
-#   2015年: 3=不明 → NaN
-harm_df.loc[harm_df['year'] == 2015, 'bug'] = (
-    harm_df.loc[harm_df['year'] == 2015, 'bug']
-    .where(harm_df.loc[harm_df['year'] == 2015, 'bug'] != 3, other=np.nan))
-#   2016年以降: 4=不明 → NaN (3=収穫物で目立った は有効な情報として保持)
-harm_df.loc[harm_df['year'] >= 2016, 'bug'] = (
-    harm_df.loc[harm_df['year'] >= 2016, 'bug']
-    .where(harm_df.loc[harm_df['year'] >= 2016, 'bug'] != 4, other=np.nan))
+
 
 # ── フラグ列: TRUE/FALSE → 1/0 変換（NaN → 被害なし=0）──────────────────────
 for c in HARM_FLAG_COLS:
@@ -286,6 +291,28 @@ print(f'病害結合後: {len(all_data)} 件')
 n_score_nan = {c: int(all_data[c].isna().sum()) for c in HARM_SCORE_COLS}
 print(f'  スコアNaN件数（不明値+未回答）: { {k:v for k,v in n_score_nan.items() if v>0} }')
 
+
+# ── 7b. NDVI特徴量の結合 ───────────────────────────────────────────────────────
+if USE_NDVI and os.path.exists(NDVI_FEATURES_CSV):
+    ndvi_feat_df = pd.read_csv(NDVI_FEATURES_CSV)
+    ndvi_feat_df['field_id'] = ndvi_feat_df['field_id'].astype(int)
+    ndvi_feat_df['year']     = ndvi_feat_df['year'].astype(int)
+
+    # 異常値（AUC < 0）を除外
+    ndvi_feat_df = ndvi_feat_df[ndvi_feat_df['auc'] > 0]
+
+    # field_id, year をキーに結合（left join → NDVI未取得圃場はNaN）
+    all_data = all_data.merge(
+        ndvi_feat_df[['field_id', 'year'] + NDVI_FEAT_COLS],
+        on=['field_id', 'year'],
+        how='left'
+    )
+    n_ndvi_ok  = all_data[NDVI_FEAT_COLS[0]].notna().sum()
+    n_ndvi_nan = all_data[NDVI_FEAT_COLS[0]].isna().sum()
+    print(f'NDVI特徴量結合: 成功={n_ndvi_ok}件 / NaN={n_ndvi_nan}件')
+    print(f'  ※ NaN圃場はLightGBMが自動処理（除外しない）')
+else:
+    print('NDVI特徴量: スキップ（USE_NDVI=False または CSV が存在しない）')
 
 
 # ── 8. LightGBM モデル定義 ──────────────────────────────────────────────────────────────
@@ -393,10 +420,12 @@ def _hpo_objective(trial, X_all, y_diff_all, y_true_all, y_maff_all, year_all, n
 
 
 # ── 9. LOYO 実行 ───────────────────────────────────────────────────────────────────
-all_feat_cols     = gdd_feat_cols + HARM_COLS + ['between_lines', 'between_stocks']
-num_feat_cols     = all_feat_cols  # 数値特徴量列（27次元気象+5次元病害+2次元=34次元）
-all_feat_cols_cat = all_feat_cols + CAT_COLS   # breed を含む全特徴量（35次元）
-# 27次元気象 + 5次元病害 + 2次元（条間・株間） + 1次元（breed） = 35次元
+ndvi_cols_to_add = NDVI_FEAT_COLS if USE_NDVI and os.path.exists(NDVI_FEATURES_CSV) else []
+all_feat_cols     = gdd_feat_cols + HARM_COLS + ['between_lines', 'between_stocks'] + ndvi_cols_to_add
+num_feat_cols     = all_feat_cols  # 数値特徴量列
+all_feat_cols_cat = all_feat_cols + CAT_COLS   # breed を含む全特徴量
+print(f'\n特徴量次元数: {len(all_feat_cols_cat)} 次元')
+print(f'  気象: {len(gdd_feat_cols)} / 病害: {len(HARM_COLS)} / 栽培: 2 / NDVI: {len(ndvi_cols_to_add)} / breed: 1')
 
 # breedのpandascategory型を全データ共通のカテゴリに統一（LOYO分割時にカテゴリが欠けるのを防ぐ）
 all_data['breed'] = all_data['breed'].astype('category')
