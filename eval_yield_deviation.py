@@ -59,7 +59,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 # NDVI特徴量CSV（05_extract_ndvi_features.pyで生成）
 NDVI_FEATURES_CSV = os.path.join('data', 'processed', 'ndvi_features_v2.csv')
-USE_NDVI          = True   # False にすると NDVI なしで実行（比較用）
+USE_NDVI          = False   # False にすると NDVI なしで実行（比較用）
 # NDVI特徴量列（固定DAP点 + 要約統計）
 NDVI_FEAT_COLS = [
     'ndvi_dap030', 'ndvi_dap045', 'ndvi_dap060', 'ndvi_dap075',
