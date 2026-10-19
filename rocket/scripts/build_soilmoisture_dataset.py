@@ -28,6 +28,10 @@ OUT_STATIC = os.path.join(OUT_DIR, 'field_year_static.csv')
 STATIC_COLS = ['yield', 'seed_date', 'harvest_date', 'breed', 'irrigation',
                'lat', 'lon', 'depth', 'between_lines', 'between_stocks']
 
+# 観測数がこの値未満の圃場x年は系列が短すぎるため除外する
+# (field_id=5 は n_obs=3、field_id=580 は n_obs=12)
+MIN_OBS = 30
+
 
 def main():
     conn = sqlite3.connect(DB)
@@ -74,6 +78,12 @@ def main():
     d['seed_date'] = pd.to_datetime(d['seed_date'], errors='coerce')
     d['harvest_date'] = pd.to_datetime(d['harvest_date'], errors='coerce')
     d['dap'] = (d['date'] - d['seed_date']).dt.days
+
+    # 観測数が少ない圃場x年を除外
+    cnt = d.groupby(['field_id', 'year'])['VWC'].transform('size')
+    short = d.loc[cnt < MIN_OBS, ['field_id', 'year']].drop_duplicates()
+    print(f'観測数<{MIN_OBS} で除外する圃場x年: {len(short)}件 -> {short.values.tolist()}')
+    d = d[cnt >= MIN_OBS]
 
     # 時系列テーブル
     ts = d[['field_id', 'year', 'date', 'dap', 'VWC']]
