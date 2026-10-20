@@ -7,6 +7,7 @@ amd/
 venv/
 .venv/
 venv_ndvi/
+venv_rocket/
 
 # ---- 大容量データ・モデル（完全除外） ----
 # 先頭の / でルート直下の data/, outputs/ のみ除外（src/data/ は除外しない）
@@ -53,3 +54,6 @@ dist/
 tmp/
 temp/
 PythonWorks/__pycache__/__init__.cpython-312.pyc
+
+# ---- 参考論文PDF（著作権のため公開しない） ----
+rocket/docs/papers/
