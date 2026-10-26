@@ -4,7 +4,7 @@
 
 土壌水分量(VWC)の時系列を入力として、大豆圃場の多収(収量上位)と低収(収量下位)を分類し、**その精度を上げていく**こと。手法は ROCKET を軸にする。今後の作業はこのディレクトリ内で行う。
 
-進捗: データセット構築・品質確認・可視化・ROCKET デモ、段階1(データの棚卸し)、段階2(非時系列の基準線、EXP-003)、段階3(揃え方の起点と窓の集計、EXP-004, 005)、段階4(入力データ、EXP-006)、段階5(MiniRocket による初めての評価、EXP-007)まで完了。
+進捗: データセット構築・品質確認・可視化・ROCKET デモ、段階1(データの棚卸し)、段階2(非時系列の基準線、EXP-003)、段階3(揃え方の起点と窓の集計、EXP-004, 005)、段階4(入力データ、EXP-006)、段階5(MiniRocket による初めての評価、EXP-007)、段階6(確認用の解析、EXP-008)まで完了。
 
 ## 実行環境とコマンド
 
@@ -72,6 +72,7 @@ rocket\venv_rocket\Scripts\python rocket\scripts\plot_vwc_by_region.py
 - **入力データは `data/processed/stage4/`**(EXP-006)。`<名前>_X.npy` が (件数, 1, 60) の生の VWC、`<名前>_meta.csv` が同じ順のメタデータ。名前は main / dap / main_common / dap_common(両方を覆う77件)/ main_obs / main_no_kakogawa。作り方は `src/windows.py`(開花日の付与、窓の切り出し、変換 `to_raw` / `znorm` / `first_diff`)。収穫日より後の観測は使わない
 - 非時系列の基準線は StandardScaler → LogisticRegression(L2, **C=1 固定**)。結果は `analysis/stage2/report.md`。どの特徴量も偶然水準程度で、Holm 補正後に有意なものは無い
 - **CV は `muniCd` 単位の GroupKFold**。同じ地域の圃場は気象や土壌が似ていて、分けると精度が過大になる(データ漏洩)ため。ランダム分割は使わない。`label_muniyear` が付く地域は21で、1地域あたり2〜10件。fold 数は少なめになる
+- **段階6以降の分類器は `RidgeClassifierCV(alphas=np.logspace(-3, 3, 10) × n_train)`**(n_train は fold の学習件数)。StandardScaler(with_mean=False) と組み合わせると、MiniRocket 原論文の `RidgeClassifierCV(alphas=np.logspace(-3, 3, 10), normalize=True)` と等価(EXP-008 の事前確認)。変換は sktime 1.2.0 の MiniRocket(aeon は venv_rocket の版が変わるので使わない)。sktime の `Rocket` は `normalise=True` が既定なので、使うときは明示する
 - 基本構成は `Rocket`(変換器) → `StandardScaler(with_mean=False)` → `RidgeClassifierCV(alphas=np.logspace(-3, 3, 10))`。`RocketClassifier` の内部構成と同じ。**ただし sktime 1.2.0 の `Rocket` 変換器も、実際には不揃いな系列長を扱えない**(タグ `capability:unequal_length` は True なのに、nested_univ / pd-multiindex / df-list のどの形式でも ValueError になる。EXP-001)。長さが揃っていなくても動くのは、`MiniRocketMultivariateVariable` と、公式実装を1系列ずつ適用する方法だけ。公式の `external/rocket/code/rocket_functions.py` は NumPy 2 で削除された `np.NINF` を使っているので、**import した時点で失敗する**。代わりに `src/rocket_kernels.py` を使う。ここには `-np.inf` に直した公式実装の写しと、前処理(`znorm`, `pad_with_noise`, `resample`, `apply_kernels_variable`)がある。ROCKET は入力が z 正規化されている前提なので、系列は本来の長さで z 正規化してから長さを揃える。ArrowHead での比較(EXP-002)では、時間軸の位置を揃えたまま長さを合わせる方法が一番よかった。補間とノイズパディングは精度が下がった。VWC では、系列を揃えて固定長にする(D-005、下の「系列の揃え方」)
 - 手法は当面 ROCKET(`rocket_transform="rocket"`)のみ。sktime 1.2.0 には `MiniRocketClassifier` / `MultiRocketClassifier` が無い(使う場合は `from sktime.transformations.rocket import Rocket, MiniRocket, MultiRocket` の変換器か。`sktime.transformations.panel` は非推奨 `RocketClassifier(rocket_transform=...)`)
 - ROCKET の特徴量は各カーネルの「最大値」と「PPV(正の値の割合)」で、2 × num_kernels 次元(10000本なら20000次元)。94件に対して非常に高次元なので過学習に注意する
@@ -109,5 +110,6 @@ rocket\venv_rocket\Scripts\python rocket\scripts\plot_vwc_by_region.py
 
 1. (済)系列の揃え方を決め、入力データを作った(EXP-006)
 2. (済)段階5(EXP-007、`analysis/stage5/report.md`): sktime 1.2.0 の MiniRocket で評価した(aeon は venv_rocket の版が変わるので使っていない)。1次差分の入力だけが帰無分布の95%点を境界で上回った(main diff: bacc 0.590 / AUC 0.627、p=0.050)。部分集合では揺れる。Ridge の alpha は上限1000に張り付いている
-3. 段階5のレポートにある追加実験の提案(diff での揃え方の比較、alpha の範囲、置換回数、カーネルの乱数、raw+diff の2チャンネル、label_year)から、ユーザーと次の実験を決める
-4. (優先度低)`scripts/rocket_demo.py` を公式分割に直す。公式分割での値(0.806、論文値 0.8143)は EXP-002 の基準ですでに確認済み
+3. (済)段階6(EXP-008、`analysis/stage6/report.md`): 確認用の解析(main・diff・MiniRocket、乱数10通り、置換1000回)で、AUC 0.605 が帰無分布の95%点 0.595 を上回った(p=0.035、基準線 0.483)。bacc 0.544 は95%点 0.562 未満。1次差分でも揃え方の差は検出できなかった(AUC +0.055、繰り返しの85%が正)。alpha は原論文の尺度でも上限に張り付く
+4. 段階6のレポートにある追加実験の提案(alpha の候補を広げる、main と main_common の差、しきい値、label_year の全件版、MultiRocket)から、ユーザーと次の実験を決める
+5. (優先度低)`scripts/rocket_demo.py` を公式分割に直す。公式分割での値(0.806、論文値 0.8143)は EXP-002 の基準ですでに確認済み

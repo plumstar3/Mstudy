@@ -223,8 +223,8 @@ def style(ax):
 
 
 def plot_boxes(summary, folds, per_seed, baselines):
-    cfgs = summary[summary.kind != 'baseline'].reset_index(drop=True)
-    fig, axs = plt.subplots(2, 1, figsize=(13, 9), sharex=True)
+    cfgs = summary[~summary.experiment.isin(['baseline', 'ref'])].reset_index(drop=True)
+    fig, axs = plt.subplots(2, 1, figsize=(13, 9.5), sharex=True)
     for ax, m, lab in [(axs[0], 'auc', 'ROC-AUC(主)'), (axs[1], 'bacc', 'balanced accuracy(副)')]:
         data = [folds[folds.config == c].groupby('repeat')[m].mean().values for c in cfgs.config]
         bp = ax.boxplot(data, widths=0.5, patch_artist=True, medianprops=dict(color=INK, lw=1.5),
@@ -250,10 +250,10 @@ def plot_boxes(summary, folds, per_seed, baselines):
                 Line2D([], [], marker='o', color=C_ALT, ls='', ms=4), Line2D([], [], color=INK, lw=2),
                 Line2D([], [], marker='D', color=C_RED, ls='')],
                ['実験D・E(結論に使う)', '実験F(探索的)', '乱数ごとの値(10通り)', '置換検定の帰無分布の95%点',
-                '同じデータセットの最良の基準線'], loc='upper right', ncol=5, frameon=False, fontsize=9)
+                '同じデータセットの最良の基準線'], loc='upper left', bbox_to_anchor=(0.02, 0.955), ncol=5, frameon=False, fontsize=9)
     fig.suptitle('設定ごとの性能(箱 = 20回の繰り返し平均。10通りの乱数で平均した値の分布)',
-                 fontsize=13, color=INK, x=0.02, ha='left')
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+                 fontsize=13, color=INK, x=0.02, ha='left', y=0.995)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
     fig.savefig(os.path.join(OUT_DIR, 'boxplot_configs.png'), dpi=150)
     plt.close(fig)
 
