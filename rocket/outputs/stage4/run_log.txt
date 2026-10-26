@@ -1,0 +1,47 @@
+対象: label_muniyear 付き 94 件
+irrigation の値: {"'無し'": 79, "'開花期~直後'": 9, "'開花期以前'": 4, "'開花期~直後,莢肥大期'": 1, "'開花期以前,開花期~直後'": 1}
+開花日の推定式: 開花 dap = 97.6978 + (-0.288942) × 播種日の通日(学習 66 件)
+収穫日より後で除いた観測: 24 行
+
+除外:
+dataset  field_id  year muniCd  y  flower_dap  flower_estimated                        reason
+   main         1  2016   1210  0          59             False            観測開始が窓の始まりより 3 日遅い
+   main         6  2016   1210  1          55             False            観測開始が窓の始まりより 1 日遅い
+   main         7  2016   1210  1          56             False            観測開始が窓の始まりより 6 日遅い
+   main       194  2018  20202  0          41             False           観測開始が窓の始まりより 22 日遅い
+   main       384  2017  23212  0          49             False 観測終了(収穫日で打ち切り)が窓の終わりより 68 日早い
+   main       509  2017  28210  1          43              True            観測開始が窓の始まりより 1 日遅い
+   main       527  2016  28210  1          44              True           観測開始が窓の始まりより 12 日遅い
+   main       533  2016  28210  1          43              True            観測開始が窓の始まりより 4 日遅い
+   main       534  2017  28210  0          43              True            観測開始が窓の始まりより 1 日遅い
+   main       557  2017  32202  0          56             False            観測開始が窓の始まりより 3 日遅い
+   main       585  2017  40220  1          42              True 観測終了(収穫日で打ち切り)が窓の終わりより 10 日早い
+   main       586  2017  40220  0          42              True            観測開始が窓の始まりより 1 日遅い
+    dap         1  2016   1210  0          59             False           観測開始が窓の始まりより 12 日遅い
+    dap         2  2016   1210  0          55              True            観測開始が窓の始まりより 4 日遅い
+    dap         6  2016   1210  1          55             False            観測開始が窓の始まりより 6 日遅い
+    dap         7  2016   1210  1          56             False           観測開始が窓の始まりより 12 日遅い
+    dap       194  2018  20202  0          41             False           観測開始が窓の始まりより 13 日遅い
+    dap       384  2017  23212  0          49             False 観測終了(収穫日で打ち切り)が窓の終わりより 69 日早い
+    dap       467  2017  24201  1          35             False  観測終了(収穫日で打ち切り)が窓の終わりより 1 日早い
+    dap       527  2016  28210  1          44              True            観測開始が窓の始まりより 6 日遅い
+    dap       547  2017  32202  1          49              True  観測終了(収穫日で打ち切り)が窓の終わりより 1 日早い
+    dap       552  2017  32203  0          36              True  観測終了(収穫日で打ち切り)が窓の終わりより 4 日早い
+    dap       557  2017  32202  0          56             False            観測開始が窓の始まりより 9 日遅い
+    dap       572  2017  32203  0          39              True  観測終了(収穫日で打ち切り)が窓の終わりより 1 日早い
+    dap       585  2017  40220  1          42              True 観測終了(収穫日で打ち切り)が窓の終わりより 18 日早い
+
+確認(行の順番・長さ60・NaN なし はすべて assert 済み):
+         dataset  n  n_high  n_low  n_regions  n_2016  n_2017  n_2018  groups_balanced  groups_unbalanced  groups_dropped  n_flower_estimated  n_kakogawa  n_irrigated  n_irrigated_high  n_irrigated_low  n_irrigation_unknown
+            main 82      41     41         21      49      28       5               24                  5               0                  22           6           12                 6                6                     0
+             dap 81      41     40         19      49      27       5               21                  6               2                  22           9           13                 7                6                     0
+     main_common 77      39     38         19      48      24       5               22                  5               2                  18           6           12                 6                6                     0
+      dap_common 77      39     38         19      48      24       5               22                  5               2                  18           6           12                 6                6                     0
+        main_obs 60      33     27         16      35      20       5               16                  5               8                   0           0           10                 6                4                     0
+main_no_kakogawa 76      39     37         20      47      24       5               23                  4               2                  16           0           10                 6                4                     0
+段階3・3b の件数と一致: main 82 / dap 81
+
+変換: raw (82, 1, 60) / znorm (82, 1, 60) / first_diff (82, 1, 59)
+
+出力: C:\Users\amilu\Projects\vsCodeFile\Mstudy\rocket\data\processed\stage4
+      C:\Users\amilu\Projects\vsCodeFile\Mstudy\rocket\outputs\stage4

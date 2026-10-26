@@ -1,0 +1,15 @@
+[A] dap 50-99: n=85 (多収43/低収42) 地域20
+  a_obs_shape    bacc 0.520±0.116 (p=0.229)  auc 0.497±0.162 (p=0.517)
+  b_has_flower   bacc 0.553±0.078 (p=0.025)  auc 0.553±0.078 (p=0.025)
+  c_seed_doy     bacc 0.519±0.075 (p=0.299)  auc 0.545±0.121 (p=0.159)
+  d_gdd_dap50    bacc 0.510±0.054 (p=0.189)  auc 0.525±0.078 (p=0.284)
+  e_vwc_stats    bacc 0.505±0.111 (p=0.423)  auc 0.501±0.140 (p=0.478)
+  f_all          bacc 0.472±0.091 (p=0.761)  auc 0.484±0.140 (p=0.577)
+[C] dap 30-89: n=62 (多収31/低収31) 地域17
+  a_obs_shape    bacc 0.401±0.122 (p=0.995)  auc 0.320±0.147 (p=1.000)
+  b_has_flower   bacc 0.490±0.035 (p=1.000)  auc 0.459±0.056 (p=1.000)
+  c_seed_doy     bacc 0.473±0.075 (p=0.925)  auc 0.441±0.181 (p=0.925)
+  d_gdd_dap50    bacc 0.497±0.071 (p=0.085)  auc 0.473±0.163 (p=0.512)
+  e_vwc_stats    bacc 0.596±0.137 (p=0.035)  auc 0.572±0.156 (p=0.234)
+  f_all          bacc 0.521±0.156 (p=0.383)  auc 0.487±0.164 (p=0.617)
+出力: C:\Users\amilu\Projects\vsCodeFile\Mstudy\rocket\outputs\stage2

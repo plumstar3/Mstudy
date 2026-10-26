@@ -1,0 +1,81 @@
+Pipeline と特徴量の使い回しの一致(先頭10 fold): True
+
+[実験A] 揃え方の比較(77件、生の値)
+  A_MR_main_common             n=77 bacc 0.513±0.095 (q95 0.585, p=0.443)  auc 0.490±0.121 (q95 0.623, p=0.597)  [44.2s]
+  A_MR_dap_common              n=77 bacc 0.473±0.099 (q95 0.584, p=0.677)  auc 0.443±0.116 (q95 0.621, p=0.791)  [42.2s]
+  A_RK_main_common             n=77 bacc 0.561±0.114 (q95 0.597, p=0.169)  auc 0.594±0.124 (q95 0.629, p=0.149)  [113.9s]
+  A_RK_dap_common              n=77 bacc 0.501±0.123 (q95 0.585, p=0.493)  auc 0.502±0.139 (q95 0.623, p=0.527)  [113.2s]
+
+[実験B] 入力の形の比較(main 82件、MiniRocket)
+  B_MR_main_raw                n=82 bacc 0.516±0.111 (q95 0.574, p=0.368)  auc 0.520±0.116 (q95 0.600, p=0.378)  [41.7s]
+  B_MR_main_znorm              n=82 bacc 0.523±0.117 (q95 0.580, p=0.308)  auc 0.531±0.146 (q95 0.613, p=0.338)  [41.8s]
+  B_MR_main_diff               n=82 bacc 0.590±0.108 (q95 0.589, p=0.050)  auc 0.627±0.116 (q95 0.624, p=0.050)  [41.6s]
+  B_MR_main_groupcenter        n=82 bacc 0.445±0.111 (q95 0.590, p=0.776)  auc 0.435±0.131 (q95 0.603, p=0.706)  [41.7s]
+  → 平均 AUC が最も高い入力の形: diff(bacc の順位: ['diff', 'znorm', 'raw', 'groupcenter'])
+
+[実験C] 感度分析(入力の形 = diff)
+  C_MR_main_obs_diff           n=60 bacc 0.521±0.122 (q95 0.593, p=0.373)  auc 0.614±0.181 (q95 0.631, p=0.085)  [31.4s]
+  C_MR_main_no_kakogawa_diff   n=76 bacc 0.571±0.112 (q95 0.583, p=0.085)  auc 0.594±0.141 (q95 0.613, p=0.119)  [39.0s]
+  C_MR_main_no_irrigation_diff n=70 bacc 0.609±0.117 (q95 0.576, p=0.015)  auc 0.669±0.132 (q95 0.620, p=0.010)  [36.2s]
+
+[基準線]
+  main_common          base_vwc_stats   bacc 0.483  auc 0.426
+  main_common          base_seed_doy    bacc 0.499  auc 0.529
+  main_common          base_irrigated   bacc 0.483  auc 0.459
+  dap_common           base_vwc_stats   bacc 0.480  auc 0.471
+  dap_common           base_seed_doy    bacc 0.499  auc 0.529
+  dap_common           base_irrigated   bacc 0.483  auc 0.459
+  main                 base_vwc_stats   bacc 0.491  auc 0.428
+  main                 base_seed_doy    bacc 0.482  auc 0.483
+  main                 base_irrigated   bacc 0.485  auc 0.463
+  main_obs             base_vwc_stats   bacc 0.510  auc 0.503
+  main_obs             base_seed_doy    bacc 0.493  auc 0.482
+  main_obs             base_irrigated   bacc 0.500  auc 0.512
+  main_no_kakogawa     base_vwc_stats   bacc 0.486  auc 0.465
+  main_no_kakogawa     base_seed_doy    bacc 0.498  auc 0.462
+  main_no_kakogawa     base_irrigated   bacc 0.499  auc 0.513
+  main_no_irrigation   base_vwc_stats   bacc 0.510  auc 0.487
+  main_no_irrigation   base_seed_doy    bacc 0.491  auc 0.506
+  main_no_irrigation   base_irrigated   bacc 0.500  auc 0.500
+
+[まとめ]
+                           config  n  bacc_mean  bacc_sd_fold  bacc_null_q95  bacc_p  bacc_best_baseline bacc_hit  auc_mean  auc_sd_fold  auc_null_q95  auc_p  auc_best_baseline auc_hit  alpha_at_min
+                 A_MR_main_common 77      0.513         0.095          0.585   0.443               0.499    False     0.490        0.121         0.623  0.597              0.529   False          0.00
+                  A_MR_dap_common 77      0.473         0.099          0.584   0.677               0.499    False     0.443        0.116         0.621  0.791              0.529   False          0.00
+                 A_RK_main_common 77      0.561         0.114          0.597   0.169               0.499    False     0.594        0.124         0.629  0.149              0.529   False          0.00
+                  A_RK_dap_common 77      0.501         0.123          0.585   0.493               0.499    False     0.502        0.139         0.623  0.527              0.529   False          0.01
+                    B_MR_main_raw 82      0.516         0.111          0.574   0.368               0.491    False     0.520        0.116         0.600  0.378              0.483   False          0.00
+                  B_MR_main_znorm 82      0.523         0.117          0.580   0.308               0.491    False     0.531        0.146         0.613  0.338              0.483   False          0.00
+                   B_MR_main_diff 82      0.590         0.108          0.589   0.050               0.491     True     0.627        0.116         0.624  0.050              0.483    True          0.00
+            B_MR_main_groupcenter 82      0.445         0.111          0.590   0.776               0.491    False     0.435        0.131         0.603  0.706              0.483   False          0.00
+               C_MR_main_obs_diff 60      0.521         0.122          0.593   0.373               0.510    False     0.614        0.181         0.631  0.085              0.512   False          0.00
+       C_MR_main_no_kakogawa_diff 76      0.571         0.112          0.583   0.085               0.499    False     0.594        0.141         0.613  0.119              0.513   False          0.00
+     C_MR_main_no_irrigation_diff 70      0.609         0.117          0.576   0.015               0.510     True     0.669        0.132         0.620  0.010              0.506    True          0.09
+       base_vwc_stats_main_common 77      0.483         0.094          0.596   0.617               0.499     None     0.426        0.124         0.623  0.836              0.529    None           NaN
+        base_seed_doy_main_common 77      0.499         0.070          0.562   0.701               0.499     None     0.529        0.095         0.577  0.358              0.529    None           NaN
+       base_irrigated_main_common 77      0.483         0.039          0.545   0.915               0.499     None     0.459        0.051         0.547  0.915              0.529    None           NaN
+        base_vwc_stats_dap_common 77      0.480         0.128          0.598   0.652               0.499     None     0.471        0.156         0.632  0.662              0.529    None           NaN
+         base_seed_doy_dap_common 77      0.499         0.070          0.562   0.701               0.499     None     0.529        0.095         0.577  0.358              0.529    None           NaN
+        base_irrigated_dap_common 77      0.483         0.039          0.545   0.915               0.499     None     0.459        0.051         0.547  0.915              0.529    None           NaN
+              base_vwc_stats_main 82      0.491         0.078          0.578   0.597               0.491     None     0.428        0.118         0.601  0.866              0.483    None           NaN
+               base_seed_doy_main 82      0.482         0.078          0.526   0.731               0.491     None     0.483        0.129         0.568  0.522              0.483    None           NaN
+              base_irrigated_main 82      0.485         0.037          0.530   0.831               0.491     None     0.463        0.046         0.541  0.925              0.483    None           NaN
+          base_vwc_stats_main_obs 60      0.510         0.098          0.583   0.408               0.510     None     0.503        0.156         0.640  0.507              0.512    None           NaN
+           base_seed_doy_main_obs 60      0.493         0.037          0.538   0.786               0.510     None     0.482        0.142         0.595  0.547              0.512    None           NaN
+          base_irrigated_main_obs 60      0.500         0.000          0.525   0.527               0.510     None     0.512        0.067         0.546  0.209              0.512    None           NaN
+  base_vwc_stats_main_no_kakogawa 76      0.486         0.104          0.565   0.607               0.499     None     0.465        0.141         0.587  0.716              0.513    None           NaN
+   base_seed_doy_main_no_kakogawa 76      0.498         0.078          0.539   0.587               0.499     None     0.462        0.130         0.577  0.682              0.513    None           NaN
+  base_irrigated_main_no_kakogawa 76      0.499         0.011          0.529   0.483               0.499     None     0.513        0.050         0.541  0.428              0.513    None           NaN
+base_vwc_stats_main_no_irrigation 70      0.510         0.107          0.594   0.483               0.510     None     0.487        0.133         0.622  0.662              0.506    None           NaN
+ base_seed_doy_main_no_irrigation 70      0.491         0.102          0.547   0.413               0.510     None     0.506        0.160         0.575  0.313              0.506    None           NaN
+base_irrigated_main_no_irrigation 70      0.500         0.000          0.500   1.000               0.510     None     0.500        0.000         0.500  1.000              0.506    None           NaN
+
+[fold ごとの差]
+       comparison  bacc_mean_diff  bacc_sd_fold  bacc_rep_q025  bacc_rep_q975  bacc_rep_frac_pos  bacc_rep_frac_neg  bacc_detected  auc_mean_diff  auc_sd_fold  auc_rep_q025  auc_rep_q975  auc_rep_frac_pos  auc_rep_frac_neg  auc_detected
+    A_MR_main−dap           0.040         0.115         -0.044          0.103               0.85               0.15          False          0.047        0.098        -0.014         0.101              0.90              0.10         False
+    A_RK_main−dap           0.061         0.130         -0.022          0.136               0.85               0.15          False          0.092        0.143         0.026         0.183              1.00              0.00          True
+      B_znorm−raw           0.007         0.130         -0.061          0.102               0.50               0.50          False          0.011        0.138        -0.066         0.085              0.60              0.40         False
+       B_diff−raw           0.074         0.130          0.010          0.144               0.95               0.05           True          0.107        0.128         0.040         0.188              1.00              0.00          True
+B_groupcenter−raw          -0.072         0.144         -0.146          0.008               0.10               0.90          False         -0.085        0.149        -0.166        -0.006              0.05              0.95          True
+
+全体 692 秒。出力: C:\Users\amilu\Projects\vsCodeFile\Mstudy\rocket\outputs\stage5

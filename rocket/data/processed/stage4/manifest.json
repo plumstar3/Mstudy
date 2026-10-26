@@ -1,0 +1,49 @@
+{
+  "created": "2026-10-23T14:41:06",
+  "label": "label_muniyear",
+  "flowering_model": {
+    "method": "(ii) 開花 dap = a + b × 播種日の通日",
+    "a": 97.69777010370544,
+    "b": -0.2889423026202425,
+    "n_train": 66,
+    "rounding": "整数の日に丸める"
+  },
+  "windows": {
+    "main": "開花日 0〜+59 日",
+    "dap": "dap 50–109"
+  },
+  "harvest_truncation_rows": 24,
+  "array_shape": {
+    "main": [
+      82,
+      1,
+      60
+    ],
+    "dap": [
+      81,
+      1,
+      60
+    ],
+    "main_common": [
+      77,
+      1,
+      60
+    ],
+    "dap_common": [
+      77,
+      1,
+      60
+    ],
+    "main_obs": [
+      60,
+      1,
+      60
+    ],
+    "main_no_kakogawa": [
+      76,
+      1,
+      60
+    ]
+  },
+  "values": "生の VWC。znorm / first_diff は src/windows.py の関数で段階5で変換する"
+}
