@@ -2,3 +2,59 @@ Pipeline と特徴量の使い回しの一致(先頭10 fold): True
 参考: 段階5の設定の再現 AUC 0.627 / bacc 0.590(段階5: 0.627 / 0.590)
 
 [実験D] 確認用: main・diff(置換 1000 回)
+  D_main_diff                    n=82 AUC 0.605 (乱数 0.602〜0.607; q95 0.595, p=0.035)  bacc 0.544 (q95 0.562, p=0.131)  alpha 上限 1.00  [87.7s]
+
+[実験E] 揃え方の比較(diff、置換 200 回)
+  E_main_common_diff             n=77 AUC 0.541 (乱数 0.537〜0.545; q95 0.614, p=0.289)  bacc 0.502 (q95 0.569, p=0.418)  alpha 上限 1.00  [38.3s]
+  E_dap_common_diff              n=77 AUC 0.486 (乱数 0.482〜0.492; q95 0.610, p=0.567)  bacc 0.493 (q95 0.562, p=0.488)  alpha 上限 1.00  [38.5s]
+
+[実験F] 探索的(置換 200 回)
+  F1_main_raw+diff               n=82 AUC 0.555 (乱数 0.552〜0.558; q95 0.599, p=0.209)  bacc 0.518 (q95 0.563, p=0.308)  alpha 上限 1.00  [39.5s]
+  F2_main_groupcenter_diff       n=82 AUC 0.448 (乱数 0.442〜0.452; q95 0.550, p=0.667)  bacc 0.480 (q95 0.536, p=0.572)  alpha 上限 1.00  [62.8s]
+  F3_main_obs_diff               n=60 AUC 0.610 (乱数 0.603〜0.614; q95 0.634, p=0.095)  bacc 0.489 (q95 0.576, p=0.597)  alpha 上限 1.00  [33.5s]
+  F3_main_no_kakogawa_diff       n=76 AUC 0.618 (乱数 0.615〜0.621; q95 0.603, p=0.030)  bacc 0.541 (q95 0.564, p=0.154)  alpha 上限 1.00  [38.0s]
+  F3_main_no_irrigation_diff     n=70 AUC 0.587 (乱数 0.585〜0.588; q95 0.621, p=0.124)  bacc 0.560 (q95 0.570, p=0.070)  alpha 上限 0.97  [36.5s]
+  F4_main_labelyear_diff         n=58 AUC 0.557 (乱数 0.540〜0.573; q95 0.680, p=0.473)  bacc 0.554 (q95 0.612, p=0.279)  alpha 上限 0.14  [33.3s]
+
+[基準線](置換 200 回)
+  main                 base_vwc_stats   AUC 0.428  bacc 0.491
+  main                 base_seed_doy    AUC 0.483  bacc 0.482
+  main                 base_irrigated   AUC 0.463  bacc 0.485
+  main_common          base_vwc_stats   AUC 0.426  bacc 0.483
+  main_common          base_seed_doy    AUC 0.529  bacc 0.499
+  main_common          base_irrigated   AUC 0.459  bacc 0.483
+  dap_common           base_vwc_stats   AUC 0.471  bacc 0.480
+  dap_common           base_seed_doy    AUC 0.529  bacc 0.499
+  dap_common           base_irrigated   AUC 0.459  bacc 0.483
+  main_obs             base_vwc_stats   AUC 0.503  bacc 0.510
+  main_obs             base_seed_doy    AUC 0.482  bacc 0.493
+  main_obs             base_irrigated   AUC 0.512  bacc 0.500
+  main_no_kakogawa     base_vwc_stats   AUC 0.465  bacc 0.486
+  main_no_kakogawa     base_seed_doy    AUC 0.462  bacc 0.498
+  main_no_kakogawa     base_irrigated   AUC 0.513  bacc 0.499
+  main_no_irrigation   base_vwc_stats   AUC 0.487  bacc 0.510
+  main_no_irrigation   base_seed_doy    AUC 0.506  bacc 0.491
+  main_no_irrigation   base_irrigated   AUC 0.500  bacc 0.500
+  main_labelyear       base_vwc_stats   AUC 0.586  bacc 0.564
+  main_labelyear       base_seed_doy    AUC 0.482  bacc 0.476
+  main_labelyear       base_irrigated   AUC 0.529  bacc 0.514
+
+[まとめ]
+                    config  n  auc_mean  auc_seed_min  auc_seed_median  auc_seed_max  auc_null_mean  auc_null_q95  auc_p  auc_best_baseline auc_hit  bacc_mean  bacc_null_q95  bacc_p  bacc_best_baseline bacc_hit  alpha_at_max  alpha_at_min
+               D_main_diff 82     0.605         0.602            0.606         0.607          0.502         0.595  0.035              0.483    True      0.544          0.562   0.131               0.491    False         1.000         0.000
+        E_main_common_diff 77     0.541         0.537            0.541         0.545          0.492         0.614  0.289              0.529   False      0.502          0.569   0.418               0.499    False         1.000         0.000
+         E_dap_common_diff 77     0.486         0.482            0.487         0.492          0.494         0.610  0.567              0.529   False      0.493          0.562   0.488               0.499    False         1.000         0.000
+          F1_main_raw+diff 82     0.555         0.552            0.555         0.558          0.498         0.599  0.209              0.483   False      0.518          0.563   0.308               0.491    False         1.000         0.000
+  F2_main_groupcenter_diff 82     0.448         0.442            0.448         0.452          0.470         0.550  0.667              0.483   False      0.480          0.536   0.572               0.491    False         0.996         0.000
+          F3_main_obs_diff 60     0.610         0.603            0.610         0.614          0.503         0.634  0.095              0.512   False      0.489          0.576   0.597               0.510    False         0.999         0.000
+  F3_main_no_kakogawa_diff 76     0.618         0.615            0.619         0.621          0.503         0.603  0.030              0.513    True      0.541          0.564   0.154               0.499    False         0.998         0.000
+F3_main_no_irrigation_diff 70     0.587         0.585            0.587         0.588          0.507         0.621  0.124              0.506   False      0.560          0.570   0.070               0.510    False         0.967         0.024
+    F4_main_labelyear_diff 58     0.557         0.540            0.557         0.573          0.540         0.680  0.473              0.586   False      0.554          0.612   0.279               0.564    False         0.136         0.276
+      ref_stage5_main_diff 82     0.627           NaN              NaN           NaN            NaN           NaN    NaN              0.483    None      0.590            NaN     NaN               0.491     None           NaN           NaN
+
+[実験E fold ごとの差]
+metric  mean_diff  sd_fold  rep_q025  rep_q975  rep_frac_pos  rep_frac_neg  detected  n_seeds_positive  n_seeds_negative  n_seeds_detected_alone
+   auc      0.055    0.114    -0.017     0.131          0.85          0.15     False                10                 0                       1
+  bacc      0.009    0.105    -0.068     0.068          0.55          0.45     False                10                 0                       0
+
+全体 478 秒。出力: C:\Users\csica\VSCode\Mstudy\rocket\outputs\stage6
