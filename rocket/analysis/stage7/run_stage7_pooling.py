@@ -215,6 +215,42 @@ def plot_boxes(summary, folds_all, per_seed_all, best_bl):
     plt.close(fig)
 
 
+def plot_paired(pairs, ps):
+    """対の差の分布。見出しは2行に分ける。"""
+    comps = list(pairs.comparison.unique())
+    fig, axs = plt.subplots(len(comps), 2, figsize=(12, 3.6 * len(comps)), squeeze=False)
+    for i, c in enumerate(comps):
+        s = pairs[pairs.comparison == c]
+        avg = s.groupby(['repeat', 'fold'])[['d_auc', 'd_bacc']].mean().reset_index()
+        for j, m in enumerate(['auc', 'bacc']):
+            ax = axs[i, j]
+            rep = avg.groupby('repeat')[f'd_{m}'].mean()
+            seedm = s.groupby('seed')[f'd_{m}'].mean()
+            ax.hist(avg[f'd_{m}'], bins=np.linspace(-0.4, 0.4, 33), color='#2a78d6', alpha=0.35,
+                    label='fold ごとの差(乱数平均、100)')
+            ax2 = ax.twinx()
+            ax2.hist(rep, bins=np.linspace(-0.4, 0.4, 65), color='#eb6834', alpha=0.9, label='繰り返し平均の差(20)')
+            ax2.set_yticks([])
+            ax.scatter(seedm, np.full(len(seedm), -0.6), marker='|', s=200, color=INK, clip_on=False, zorder=4,
+                       label='乱数ごとの平均の差(10)')
+            ax.axvline(0, color=INK, lw=1)
+            r = ps[(ps.comparison == c) & (ps.metric == m)].iloc[0]
+            metric = 'AUC' if m == 'auc' else 'bacc'
+            ax.set_title(f'{c}({metric})\n平均 {r.mean_diff:+.3f}、繰り返し平均の 2.5〜97.5% '
+                         f'[{r.rep_q025:+.3f}, {r.rep_q975:+.3f}]、正 {r.rep_frac_pos:.0%}',
+                         fontsize=9, color=INK, loc='left')
+            s6.style(ax)
+            if i == 0 and j == 0:
+                h1, l1 = ax.get_legend_handles_labels()
+                h2, l2 = ax2.get_legend_handles_labels()
+                ax.legend(h1 + h2, l1 + l2, frameon=False, fontsize=8, loc='upper left')
+    fig.suptitle('プーリングの差(同じ分割・同じ乱数)。上2段が主な比較、下2段は参考(カーネルの作り方が違う)',
+                 fontsize=12, color=INK, x=0.02, ha='left')
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.savefig(os.path.join(OUT_DIR, 'paired_diff_pooling.png'), dpi=150)
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
@@ -323,9 +359,7 @@ def main():
     coef.to_csv(os.path.join(OUT_DIR, 'coef_importance_seed0.csv'), index=False, encoding='utf-8-sig')
 
     plot_boxes(summary, folds_all, per_seed_all, best_bl)
-    s7.OUT_DIR = OUT_DIR
-    s7.plot_paired(pairs, ps)
-    os.replace(os.path.join(OUT_DIR, 'paired_diff_inputs.png'), os.path.join(OUT_DIR, 'paired_diff_pooling.png'))
+    plot_paired(pairs, ps)
 
     show = ['config', 'n', 'auc_mean', 'auc_seed_min', 'auc_seed_median', 'auc_seed_max', 'auc_null_mean',
             'auc_null_q95', 'auc_p', 'auc_hit', 'bacc_mean', 'bacc_null_q95', 'bacc_p', 'bacc_hit',

@@ -7,6 +7,7 @@ ID は `EXP-連番`。結果の数値は CV の各 fold の値と平均±標準�
 
 | ID | 日付 | 概要 | ラベル | 主指標 | 結果 |
 |---|---|---|---|---|---|
+| EXP-010 | 2026-10-28 | プーリングの比較: sktime Rocket(normalise=False)の PPV のみ vs PPV+max、1次差分と生の値(乱数10通り、置換1000回) | label_muniyear | AUC(主)/ Balanced Acc | max を加えても差は検出できず(diff AUC −0.015、raw +0.002)。Rocket はどの設定も偶然水準(diff PPV 0.547)。1次差分では MiniRocket(0.605)の方が高い |
 | EXP-009 | 2026-10-26 | 入力の形の比較を段階6の実験Dと同じ条件で(生の値・z 正規化 vs 1次差分、乱数10通り、置換1000回) | label_muniyear | AUC(主)/ Balanced Acc | 生の値 0.492、z 正規化 0.463(どちらも偶然水準)。diff − raw AUC +0.113、diff − znorm +0.142 で差あり(乱数10通りすべて)。MiniRocket は平行移動に不変でない(ゼロパディング) |
 | EXP-008 | 2026-10-26 | 確認用の解析(main diff、乱数10通り、置換1000回)・1次差分での揃え方の比較・探索的解析。alpha を原論文の尺度(×n_train)に | label_muniyear | AUC(主)/ Balanced Acc | 確認用: AUC 0.605 > 95%点 0.595(p=0.035)、基準線 0.483 → 当たっている。bacc 0.544 は95%点 0.562 未満。揃え方の差は検出できず(AUC +0.055、85%) |
 | EXP-007 | 2026-10-23 | MiniRocket(sktime)による初めての評価: 揃え方・入力の形・感度分析(置換200回) | label_muniyear | Balanced Acc / AUC | main diff 0.590/0.627 が95%点(0.589/0.624)をわずかに超えた(p=0.050)。diff > raw は差あり。揃え方の差は MiniRocket では検出できず。感度分析で2/3が95%点を下回る |
@@ -53,6 +54,45 @@ ID は `EXP-連番`。結果の数値は CV の各 fold の値と平均±標準�
 ### 次にやること
 -
 -->
+
+## EXP-010: プーリングの比較(PPV のみ / PPV + max)
+
+- 日付: 2026-10-28(実行は 2026-10-26、別の PC)
+- スクリプト: `analysis/stage7/run_stage7_pooling.py`(`rocket\venv_rocket\Scripts\python rocket\analysis\stage7\run_stage7_pooling.py`、594秒)
+- 目的: ROCKET の原論文は、カーネルごとに PPV と max の2つの特徴量を使う(MiniRocket は PPV だけ)。max を加えると結果が変わるかを、同じカーネルどうしで確かめる。記述的な比較で、主な設定(MiniRocket・1次差分)は変えない
+- 詳細: `analysis/stage7/report.md` の「プーリングの比較」
+
+### 設定
+| 項目 | 値 |
+|---|---|
+| データ | main(82件)の1次差分(59点)と生の値(60点) |
+| 変換 | sktime 1.2.0 の Rocket(num_kernels=10000、normalise=False、random_state=0〜9)。1回の出力から ppv(10000列)と ppvmax(20000列)を作る。列の並び(2j = PPV、2j+1 = max)は、カーネルの値から計算し直して照合した(最大差 2.9×10⁻⁸) |
+| 分類器・評価 | 段階6の実験Dと同じ(StandardScaler(with_mean=False)→ RidgeClassifierCV(alphas × n_train)、同じ分割、置換1000回) |
+
+### 結果([ ] は置換検定の p)
+| 入力 | 特徴量 | AUC | q95 | bacc | 判定 |
+|---|---|---|---|---|---|
+| 1次差分 | Rocket PPV | 0.547 [0.22] | 0.592 | 0.539 | × |
+| 1次差分 | Rocket PPV + max | 0.532 [0.33] | 0.599 | 0.544 | × |
+| 生の値 | Rocket PPV | 0.498 [0.51] | 0.597 | 0.513 | × |
+| 生の値 | Rocket PPV + max | 0.500 [0.52] | 0.602 | 0.514 | × |
+
+| 比較 | AUC の差(同じ符号の割合) | bacc の差 | 判定 |
+|---|---|---|---|
+| 1次差分 ppvmax − ppv | −0.015(負 70%、乱数10通りすべて負) | +0.005(正 65%) | 差は検出できず |
+| 生の値 ppvmax − ppv | +0.002(正 60%) | +0.001(正 55%) | 差は検出できず |
+| 参考 1次差分 Rocket ppv − MiniRocket | −0.058(負 95%) | −0.005 | 記述のみ |
+| 参考 生の値 Rocket ppv − MiniRocket | +0.007(正 65%) | +0.024 | 記述のみ |
+
+- 探索的な参考(乱数0): Ridge の |係数| のうち max の列の割合は、1次差分で 52.7%、生の値で 49.8%。係数の上位100列に入る max の列は 19〜23%
+- 出力: `outputs/stage7/pooling/`
+
+### 考察
+- max を加えても、結果は変わらなかった
+- Rocket は normalise=False のため、bias(−1〜1)が入力の値(1次差分の SD 0.036)より大きすぎ、PPV が0か1に張り付くカーネルが多い(5系列での確認で約4割)。データから bias を決める MiniRocket より不利な条件で、Rocket と MiniRocket の比較(参考)に効いている可能性がある
+
+### 次にやること
+- 提案(未実施): Rocket に z 正規化した1次差分を入れる版、MiniRocket に max を加える版(カーネル×dilation ごとに1列)、MultiRocket
 
 ## EXP-009: 入力の形の比較(段階6の実験Dと同じ条件)
 
