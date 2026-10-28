@@ -13,6 +13,8 @@ venv_rocket/
 # 先頭の / でルート直下の data/, outputs/ のみ除外（src/data/ は除外しない）
 /data/
 /outputs/
+# rocket/ の実験出力（複数PCで同じ結果を生成してコンフリクトしやすいため）
+/rocket/outputs/
 *.db
 *.sqlite
 *.keras
