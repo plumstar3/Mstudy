@@ -7,6 +7,7 @@ ID は `EXP-連番`。結果の数値は CV の各 fold の値と平均±標準�
 
 | ID | 日付 | 概要 | ラベル | 主指標 | 結果 |
 |---|---|---|---|---|---|
+| EXP-011 | 2026-10-28 | Rocket に前提どおりの大きさの入力(R1 系列ごとの z 正規化 / R2 全体の標準偏差で割る)、1次差分、PPV のみ vs PPV+max(探索的、置換200回) | label_muniyear | AUC(主)/ Balanced Acc | 張り付きは無くなったが、どれも偶然水準(R1 PPV 0.479、R2 PPV 0.478)。R0(0.547)より低い(差あり)。max は R2 でだけ +0.053(差あり)。MiniRocket 0.605 が最良のまま |
 | EXP-010 | 2026-10-28 | プーリングの比較: sktime Rocket(normalise=False)の PPV のみ vs PPV+max、1次差分と生の値(乱数10通り、置換1000回) | label_muniyear | AUC(主)/ Balanced Acc | max を加えても差は検出できず(diff AUC −0.015、raw +0.002)。Rocket はどの設定も偶然水準(diff PPV 0.547)。1次差分では MiniRocket(0.605)の方が高い |
 | EXP-009 | 2026-10-26 | 入力の形の比較を段階6の実験Dと同じ条件で(生の値・z 正規化 vs 1次差分、乱数10通り、置換1000回) | label_muniyear | AUC(主)/ Balanced Acc | 生の値 0.492、z 正規化 0.463(どちらも偶然水準)。diff − raw AUC +0.113、diff − znorm +0.142 で差あり(乱数10通りすべて)。MiniRocket は平行移動に不変でない(ゼロパディング) |
 | EXP-008 | 2026-10-26 | 確認用の解析(main diff、乱数10通り、置換1000回)・1次差分での揃え方の比較・探索的解析。alpha を原論文の尺度(×n_train)に | label_muniyear | AUC(主)/ Balanced Acc | 確認用: AUC 0.605 > 95%点 0.595(p=0.035)、基準線 0.483 → 当たっている。bacc 0.544 は95%点 0.562 未満。揃え方の差は検出できず(AUC +0.055、85%) |
@@ -54,6 +55,52 @@ ID は `EXP-連番`。結果の数値は CV の各 fold の値と平均±標準�
 ### 次にやること
 -
 -->
+
+## EXP-011: Rocket に前提どおりの大きさの入力を入れて比べ直す
+
+- 日付: 2026-10-28(別の PC で実行、361秒)
+- スクリプト: `analysis/stage8/run_stage8.py`(`rocket\venv_rocket\Scripts\python rocket\analysis\stage8\run_stage8.py`)
+- 目的: EXP-010 で Rocket(normalise=False)が偶然水準だったのは、1次差分の値が小さく、bias(−1〜1)に比べて PPV が張り付くためではないかを確かめる。すべて探索的で、主な設定(MiniRocket・1次差分)は変えない
+- 詳細: `analysis/stage8/report.md`
+
+### 設定
+| 項目 | 値 |
+|---|---|
+| データ | main(82件)の1次差分(59点) |
+| 入力 | R1: Rocket normalise=True(系列ごとの z 正規化)。R2: fold の学習データ全体の標準偏差 s(ddof=0)で割る(平均は引かない、Pipeline 内で fit)。参考: R0(段階7、normalise=False)、MiniRocket(段階6 実験D) |
+| 特徴量 | Rocket(num_kernels=10000、random_state=0〜9)の1回の出力から、PPV のみ(10000列)と PPV+max(20000列) |
+| 分類器・評価 | 段階6の実験Dと同じ(StandardScaler(with_mean=False)→ RidgeClassifierCV(alphas × n_train)、同じ分割)。置換200回 |
+| 事前の確認 | sktime 1.2.0。カーネルは random_state と系列の長さだけで決まり、R0・R1・R2 で同じ(完全一致) |
+
+### 結果([ ] は置換検定の p)
+| 入力 | 特徴量 | AUC | q95 | bacc | 判定 |
+|---|---|---|---|---|---|
+| R0(段階7) | PPV | 0.547 [0.22] | 0.592 | 0.539 | × |
+| R1 | PPV | 0.479 [0.67] | 0.617 | 0.496 | × |
+| R1 | PPV+max | 0.470 [0.79] | 0.624 | 0.487 | × |
+| R2 | PPV | 0.478 [0.65] | 0.602 | 0.492 | × |
+| R2 | PPV+max | 0.531 [0.35] | 0.610 | 0.511 | × |
+| MiniRocket(段階6) | PPV | 0.605 [0.035] | 0.595 | 0.544 | AUC で当たっている |
+
+| 比較 | AUC の差(同じ符号の割合) | 判定 |
+|---|---|---|
+| R1 − R0(PPV) | −0.068(負 100%、乱数10/10) | 差あり(R0 が高い) |
+| R2 − R0(PPV) | −0.068(負 100%、乱数10/10) | 差あり(R0 が高い) |
+| R2 − R1(PPV) | −0.001(正 60%) | 差は検出できず |
+| max の効果 R1 | −0.010(正 50%) | 差は検出できず |
+| max の効果 R2 | +0.053(正 95%、乱数10/10) | 差あり |
+
+- PPV の張り付き(乱数0・最初の fold の学習データ63系列): R0 35.2% → R1・R2 0%
+- alpha は R1・R2 のすべての設定で100%の fold が上限
+- 出力: `outputs/stage8/`
+
+### 考察
+- 張り付きを無くしても Rocket は当たらず、むしろ R0 より下がった。「張り付きが原因」という EXP-010 の説明は主な原因ではなかった
+- R2 でだけ max が効いたのは、R2 に1次差分の振れ幅の情報が残り、max がそれを拾うためと考えられる(推測)
+- MiniRocket(0.605)が最良のまま。主な設定は変えない
+
+### 次にやること
+- 提案(未実施): R0 の張り付いていない列だけ・bias 0 の Rocket(変化の符号の並びが情報の中心か)、MiniRocket の bias の分位点の範囲を変える、sktime の MultiRocket
 
 ## EXP-010: プーリングの比較(PPV のみ / PPV + max)
 
