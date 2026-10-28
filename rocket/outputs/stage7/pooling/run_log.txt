@@ -1,0 +1,39 @@
+並列数 32、乱数 0〜9、置換 1000 回
+Rocket の列の確認(diff、5系列 × 先頭300カーネル): 2j 列 = PPV、2j+1 列 = max → True  PPV の最大差 2.93e-08(1件分 = 1/出力長)、max の最大相対差 1.89e-07、入れ替えた場合の最小のずれ 3.07e-04
+Rocket の列の確認(raw、5系列 × 先頭300カーネル): 2j 列 = PPV、2j+1 列 = max → True  PPV の最大差 2.87e-08(1件分 = 1/出力長)、max の最大相対差 2.10e-07、入れ替えた場合の最小のずれ 1.58e-05
+段階6の実験Dと同じ分割: True
+Pipeline と特徴量の使い回しの一致(diff、先頭10 fold、乱数0): {'ppv': True, 'ppvmax': True}
+Pipeline と特徴量の使い回しの一致(raw、先頭10 fold、乱数0): {'ppv': True, 'ppvmax': True}
+高速版と元の perm_cached の一致(1次差分・Rocket PPV+max、乱数0、置換20回): True
+  H_diff_ppvmax                  n=82 AUC 0.532 (乱数 0.523〜0.539; q95 0.599, p=0.330)  bacc 0.544 (q95 0.564, p=0.126)  alpha 上限 1.00  [143.0s]
+  H_diff_ppv                     n=82 AUC 0.547 (乱数 0.540〜0.560; q95 0.592, p=0.220)  bacc 0.539 (q95 0.559, p=0.133)  alpha 上限 1.00  [126.4s]
+  H_raw_ppvmax                   n=82 AUC 0.500 (乱数 0.494〜0.507; q95 0.602, p=0.518)  bacc 0.514 (q95 0.576, p=0.409)  alpha 上限 1.00  [143.9s]
+  H_raw_ppv                      n=82 AUC 0.498 (乱数 0.492〜0.509; q95 0.597, p=0.509)  bacc 0.513 (q95 0.571, p=0.399)  alpha 上限 1.00  [127.3s]
+
+[まとめ]
+       config  n  auc_mean  auc_seed_min  auc_seed_median  auc_seed_max  auc_null_mean  auc_null_q95  auc_p  auc_hit  bacc_mean  bacc_null_q95  bacc_p  bacc_hit  alpha_at_max  alpha_at_min
+H_diff_ppvmax 82     0.532         0.523            0.533         0.539          0.499         0.599  0.330    False      0.544          0.564   0.126     False         1.000         0.000
+   H_diff_ppv 82     0.547         0.540            0.545         0.560          0.495         0.592  0.220    False      0.539          0.559   0.133     False         0.999         0.001
+ H_raw_ppvmax 82     0.500         0.494            0.499         0.507          0.500         0.602  0.518    False      0.514          0.576   0.409     False         1.000         0.000
+    H_raw_ppv 82     0.498         0.492            0.499         0.509          0.498         0.597  0.509    False      0.513          0.571   0.399     False         1.000         0.000
+  ref_MR_diff 82     0.605         0.602            0.606         0.607          0.502         0.595  0.035     True      0.544          0.562   0.131     False         1.000         0.000
+   ref_MR_raw 82     0.492         0.488            0.491         0.498          0.501         0.602  0.574    False      0.489          0.570   0.622     False         1.000         0.000
+
+[fold ごとの差(10通りの乱数で平均)]
+                      comparison metric  mean_diff  sd_fold  rep_q025  rep_q975  rep_frac_pos  rep_frac_neg  detected  n_seeds_positive  n_seeds_negative  n_seeds_detected_alone
+            主 diff: ppvmax − ppv    auc     -0.015    0.065    -0.069     0.035          0.30          0.70     False                 0                10                       0
+            主 diff: ppvmax − ppv   bacc      0.005    0.063    -0.030     0.037          0.65          0.35     False                 8                 2                       0
+             主 raw: ppvmax − ppv    auc      0.002    0.052    -0.032     0.031          0.60          0.40     False                 7                 3                       0
+             主 raw: ppvmax − ppv   bacc      0.001    0.077    -0.047     0.048          0.55          0.45     False                 6                 4                       0
+参考 diff: Rocket ppv − MiniRocket    auc     -0.058    0.076    -0.102     0.003          0.05          0.95      True                 0                10                       8
+参考 diff: Rocket ppv − MiniRocket   bacc     -0.005    0.075    -0.061     0.048          0.55          0.45     False                 0                10                       0
+ 参考 raw: Rocket ppv − MiniRocket    auc      0.007    0.052    -0.036     0.044          0.65          0.35     False                10                 0                       0
+ 参考 raw: Rocket ppv − MiniRocket   bacc      0.024    0.064    -0.027     0.080          0.85          0.15     False                10                 0                       0
+
+[探索的な参考: Ridge の |係数| のうち max の列が占める割合(乱数0、100 fold の平均)]
+       share_abs_coef_max  share_top100_max
+input                                      
+diff                0.527             0.190
+raw                 0.498             0.228
+
+全体 594 秒。出力: C:\Users\csica\VSCode\Mstudy\rocket\outputs\stage7\pooling
