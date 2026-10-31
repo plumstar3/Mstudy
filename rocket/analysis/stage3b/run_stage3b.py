@@ -21,7 +21,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.lines import Line2D
 
 STAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROCKET_DIR = os.path.dirname(os.path.dirname(STAGE_DIR))
@@ -79,30 +78,20 @@ def build_cases():
 
 
 def plot_pre_post(d):
-    fig, axs = plt.subplots(2, 2, figsize=(12, 7.5), sharex='col', sharey=True)
-    for j, (col, label, bins) in enumerate([('pre', '開花前の日数 pre = 開花日 − 観測開始日', np.arange(-15, 51, 5)),
+    fig, axs = plt.subplots(1, 2, figsize=(12, 4.5), sharey=True)
+    for ax, (col, label, bins) in zip(axs, [('pre', '開花前の日数 pre = 開花日 − 観測開始日', np.arange(-15, 51, 5)),
                                             ('post', '開花後の日数 post = 観測終了日 − 開花日', np.arange(-10, 106, 5))]):
-        for i, (yv, yl) in enumerate([(1, '多収'), (0, '低収')]):
-            ax = axs[i, j]
-            s = d[d.y == yv]
-            ax.hist([s.loc[~s.flower_estimated, col], s.loc[s.flower_estimated, col]], bins=bins,
-                    stacked=True, color=[C_OBS, C_EST], edgecolor='white', linewidth=1,
-                    label=['開花日が実測', '開花日が推定'])
-            k = s[s.kakogawa]
-            # 加古川は下に三角の印(縦に少しずらして重なりを見せる)
-            ax.scatter(k[col], -0.6 - 0.5 * (k.groupby(col).cumcount()), marker='^', s=40,
-                       color=INK, zorder=3, label='加古川(28210)')
-            ax.axvline(0, color=MUTED, lw=0.8)
-            ax.set_title(f'{yl}({len(s)}件)  {col}', fontsize=10, color=INK, loc='left')
-            ax.grid(axis='y', color=GRID, lw=0.8)
-            ax.set_axisbelow(True)
-            style(ax)
-            if i == 1:
-                ax.set_xlabel(label, color=INK)
-            if j == 0:
-                ax.set_ylabel('圃場×年の数', color=INK)
-            ax.set_yticks(range(0, 15, 2))
-    axs[0, 1].legend(frameon=False, fontsize=9, loc='upper right')
+        ax.hist([d.loc[~d.flower_estimated, col], d.loc[d.flower_estimated, col]], bins=bins,
+                stacked=True, color=[C_OBS, C_EST], edgecolor='white', linewidth=1,
+                label=['開花日が実測', '開花日が推定'])
+        ax.axvline(0, color=MUTED, lw=0.8)
+        ax.set_title(col, fontsize=10, color=INK, loc='left')
+        ax.grid(axis='y', color=GRID, lw=0.8)
+        ax.set_axisbelow(True)
+        style(ax)
+        ax.set_xlabel(label, color=INK)
+    axs[0].set_ylabel('圃場×年の数', color=INK)
+    axs[1].legend(frameon=False, fontsize=9, loc='upper right')
     fig.suptitle('開花前後のデータ日数(label_muniyear 付き94件、観測終了は収穫日で打ち切り)',
                  fontsize=13, color=INK, x=0.02, ha='left')
     fig.tight_layout()
@@ -121,8 +110,6 @@ def plot_spans(d):
         col = C_HIGH if r.y == 1 else C_LOW
         ax.barh(i, r.post + r.pre, left=-r.pre, height=0.7, color=col,
                 alpha=0.45 if r.flower_estimated else 1.0, lw=0)
-        if r.kakogawa:
-            ax.plot(r.post + 2, i, marker='<', color=INK, ms=5)
     ax.set_yticks(range(len(s)), [f'{f}/{y}' for f, y in zip(s.field_id, s.year)], fontsize=6)
     ax.set_ylim(len(s) - 0.5, -0.5)
     ax.set_xlim(-50, 105)
@@ -136,10 +123,9 @@ def plot_spans(d):
     ax.text(BASE[1] / 2, -1.2, '段階3の主設定 0〜+59', ha='center', va='bottom', fontsize=9, color=MUTED)
     ax.text(63, -1.2, '+63', ha='center', va='bottom', fontsize=9, color=MUTED)
     handles = [plt.Rectangle((0, 0), 1, 1, color=C_HIGH), plt.Rectangle((0, 0), 1, 1, color=C_LOW),
-               plt.Rectangle((0, 0), 1, 1, color=MUTED, alpha=0.45),
-               Line2D([], [], marker='<', color=INK, ls='', ms=6)]
-    fig.legend(handles, ['多収', '低収', '薄い色 = 開花日が推定', '加古川(28210)'],
-               loc='upper right', ncol=4, frameon=False, fontsize=10)
+               plt.Rectangle((0, 0), 1, 1, color=MUTED, alpha=0.45)]
+    fig.legend(handles, ['多収', '低収', '薄い色 = 開花日が推定'],
+               loc='upper right', ncol=3, frameon=False, fontsize=10)
     fig.suptitle('各圃場の VWC 測定期間(開花日を0日目とした軸、観測終了は収穫日で打ち切り)',
                  fontsize=13, color=INK, x=0.02, ha='left')
     fig.tight_layout(rect=(0, 0, 1, 0.975))
