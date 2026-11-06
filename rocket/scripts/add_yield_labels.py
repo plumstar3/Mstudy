@@ -3,9 +3,13 @@ field_year_static.csv に多収・低収ラベルを付与する。
 
 label_muniyear : 同一 muniCd x 同一年 の中で収量の上位/下位 約1/3 (グループ4圃場以上のみ)
 label_year     : 同一年 の中で収量の上位/下位 約1/3 (比較用)
+label_muniyear_median : 同一 muniCd x 同一年 の中で収量の中央値で2分割 (グループ4圃場以上のみ)
+label_muniyear_median_min2 : label_muniyear_median と同じ分け方を、2圃場以上のグループに付けたもの
+label_year_median     : 同一年 の中で収量の中央値で2分割
   0 = 低収, 1 = 多収, 空欄 = ラベルなし(中間 or 対象外)
 
-グループ内 n 件のとき、上位と下位から同数 k = round(n/3) 件ずつ採る(残りは中間として除外)。
+上位/下位1/3: グループ内 n 件のとき、上位と下位から同数 k = round(n/3) 件ずつ採る(残りは中間として除外)。
+中央値分割: k = floor(n/2) 件ずつ採る。n が偶数なら全件に付き、奇数なら中央値の1件だけ空欄になる。
 収量が同値の場合は並び順(field_id昇順)で決める。
 
 出力: rocket/data/processed/field_year_labeled.csv
@@ -22,14 +26,17 @@ OUT_CSV = os.path.join(ROCKET_DIR, 'data', 'processed', 'field_year_labeled.csv'
 MIN_GROUP_SIZE = 4  # 地域x年ラベルを付ける最小グループ圃場数
 
 
-def assign_label(df, keys, min_size):
-    """keys でグループ化し、各グループで yield の下位k件=0, 上位k件=1 を付ける。"""
+def assign_label(df, keys, min_size, split='tertile'):
+    """keys でグループ化し、各グループで yield の下位k件=0, 上位k件=1 を付ける。
+
+    split='tertile' なら k = round(n/3)、'median' なら k = floor(n/2)。
+    """
     label = pd.Series(np.nan, index=df.index, dtype='float')
     for _, g in df.groupby(keys):
         n = len(g)
         if n < min_size:
             continue
-        k = int(np.floor(n / 3 + 0.5))
+        k = int(np.floor(n / 3 + 0.5)) if split == 'tertile' else n // 2
         if k < 1:
             continue
         order = g.sort_values(['yield', 'field_id']).index
@@ -43,15 +50,20 @@ def main():
 
     df['label_muniyear'] = assign_label(df, ['muniCd', 'year'], MIN_GROUP_SIZE)
     df['label_year'] = assign_label(df, ['year'], 1)
+    df['label_muniyear_median'] = assign_label(df, ['muniCd', 'year'], MIN_GROUP_SIZE, split='median')
+    df['label_year_median'] = assign_label(df, ['year'], 1, split='median')
+    df['label_muniyear_median_min2'] = assign_label(df, ['muniCd', 'year'], 2, split='median')
+    label_cols = ['label_muniyear', 'label_year', 'label_muniyear_median', 'label_year_median',
+                  'label_muniyear_median_min2']
 
     # 欠損可能な整数列として保存
-    for c in ['label_muniyear', 'label_year']:
+    for c in label_cols:
         df[c] = df[c].astype('Int64')
 
     df.to_csv(OUT_CSV, index=False, encoding='utf-8-sig')
     print(f'出力: {OUT_CSV} ({len(df)}行)')
 
-    for c in ['label_muniyear', 'label_year']:
+    for c in label_cols:
         s = df[c]
         print(f'\n[{c}] ラベル付与 {int(s.notna().sum())}件 (低収 {int((s == 0).sum())} / 多収 {int((s == 1).sum())})')
         print('  年別:', df[s.notna()].groupby('year').size().to_dict())

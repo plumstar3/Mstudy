@@ -18,6 +18,7 @@ rocket\venv_rocket\Scripts\python -m pip install -r rocket\requirements.txt
 # データセット再構築(この順で実行)
 rocket\venv_rocket\Scripts\python rocket\scripts\build_soilmoisture_dataset.py
 rocket\venv_rocket\Scripts\python rocket\scripts\add_yield_labels.py
+rocket\venv_rocket\Scripts\python rocket\scripts\add_flowering_dates.py   # 開花日の列(要 flowering_pred_64.csv)
 
 # 地域×年ごとの VWC 推移の図(--x date で横軸を日付に)
 rocket\venv_rocket\Scripts\python rocket\scripts\plot_vwc_by_region.py
@@ -37,7 +38,9 @@ rocket\venv_rocket\Scripts\python rocket\scripts\plot_vwc_by_region.py
 - `docs/sessions/`, `docs/meetings/` — 作業セッションのまとめと打ち合わせメモ。`_template.md` をコピーして `YYYY-MM-DD_*.md` で保存する
 - `external/rocket/` — ROCKET 公式実装(GPL-3.0)。入れ子 Git を避けるため `.git` を削除して取り込んだもの。**編集しない**
 - `data/processed/`, `outputs/` — 生成物。スクリプト内のパスは `__file__` 基準で解決する(既存スクリプトの `ROCKET_DIR` / `ROOT_DIR` の書き方に合わせる)
-- 元データはリポジトリルートの `data/processed/FieldData_fieldid.db`(`Questionaire`, `SolidMoisture` テーブル)と `outputs/reverse_geocode/field_addresses.csv`。これらは読むだけで書き換えない
+- `docs/data_issues.md` — 元データの問題点(日付の補完・異常値など)と対応の記録
+- 元データは **`rocket/data/raw/FieldData_fieldid.db`**(2026-11-05 からこちらを使う。`Questionaire`, `SolidMoisture` テーブル)と、リポジトリルートの `outputs/reverse_geocode/field_addresses.csv`。読むだけで書き換えない(列の追加などが必要なときはユーザーに確認し、`.bak` を作ってから)。ルートの `data/processed/FieldData_fieldid.db` との違いは、`Questionaire.date_flag` 列があること。**既存のスクリプト(`build_soilmoisture_dataset.py`, `src/windows.py` など)はまだルートの DB を読んでいる**
+- **開花日推定には `Questionaire.seed_date_raw` / `harvest_date_raw`(補完前の播種日・収穫日)を使う**。`seed_date` / `harvest_date` には近傍圃場からの補完値(播種日26件・収穫日93件)が混ざっている。`date_flag` が付いた圃場×年(A4・2016 / O7・O8・2016 / D1〜D4・2015)は日付に要確認の点がある。詳細は `docs/data_issues.md`
 
 ## データセット(`data/processed/`)
 
@@ -45,7 +48,9 @@ rocket\venv_rocket\Scripts\python rocket\scripts\plot_vwc_by_region.py
 |---|---|---|---|
 | `soilmoisture_timeseries.csv` | 圃場×年×観測日 | 30,040 | `field_id, year, date, dap, VWC` |
 | `field_year_static.csv` | 圃場×年 | 304 | `field_id, year, muniCd, yield, seed_date, harvest_date, breed, irrigation, lat, lon, depth, between_lines, between_stocks, n_obs` |
-| `field_year_labeled.csv` | 圃場×年 | 304 | 上記 + `label_muniyear`, `label_year` |
+| `field_year_labeled.csv` | 圃場×年 | 304 | 上記 + `label_muniyear`, `label_year`, `label_muniyear_median`, `label_year_median`, `label_muniyear_median_min2` + `flower_date_obs`, `flower_date_pred`, `flower_date`, `flower_source` |
+
+- **開花日は `field_year_labeled.csv` の `flower_date` を使う**(2026-11-05 追加、`scripts/add_flowering_dates.py`)。実測(`Questionaire.flower_date`、240件)を優先し、実測の無い64件は EXP-016 の予測(`flowering_pred_64.csv`)で埋めてある。`flower_source` が `obs` / `pred`。`label_muniyear` 94件では実測66 / 予測28。`src/windows.py` と `stage4/` の入力(EXP-006〜011)はまだ古い式 (ii) で開花日を補っているので、切り替えは次の実験で行う
 
 - 結合キーは `(field_id, year)`。`muniCd` は圃場ごとに1つなので `field_id` だけで結合する
 - CSV は `utf-8-sig`。`muniCd` は `dtype=str` で読む
@@ -62,6 +67,9 @@ rocket\venv_rocket\Scripts\python rocket\scripts\plot_vwc_by_region.py
 |---|---|---|---|
 | `label_muniyear` | 同一 `muniCd`×年 | 94(47/47) | **主ラベル**。4圃場以上のグループのみ。地域×年グループ106個の大半は2圃場以下。2018年は6件のみ |
 | `label_year` | 同一年 | 202(101/101) | 比較用。地域差を除けない |
+| `label_muniyear_median` | 同一 `muniCd`×年 | 146(73/73) | 中央値分割(各集団で下位 floor(n/2) 件 = 0、上位 floor(n/2) 件 = 1。n が奇数なら中央の1件は空欄)。4圃場以上のグループのみ。2026-10-31 追加、まだ解析には使っていない |
+| `label_muniyear_median_min2` | 同一 `muniCd`×年 | 282(141/141) | `label_muniyear_median` と同じ分け方を2圃場以上のグループに付けたもの(2圃場は1位と2位、3圃場は中央の1件が空欄)。4圃場以上の件は `label_muniyear_median` と同じ。59地域。2026-10-31 追加 |
+| `label_year_median` | 同一年 | 302(151/151) | 中央値分割(同上)。2016・2017 は件数が奇数なので中央の1件ずつが空欄 |
 
 両方のラベルが付いた圃場での一致率は約0.90。両ラベルで同じモデルを学習して精度を比べ、地域差ではなく土壌水分の効果を拾えているかを確かめる想定。
 
