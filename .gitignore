@@ -16,6 +16,11 @@ venv_rocket/
 # rocket/ の実験出力（複数PCで同じ結果を生成してコンフリクトしやすいため）
 /rocket/outputs/
 *.db
+# DB のバックアップ（*.db.bak, *.db.bak_before_xxx など。GitHub の100MB制限を超える）
+*.bak
+*.bak_*
+*.db-shm
+*.db-wal
 *.sqlite
 *.keras
 *.h5
