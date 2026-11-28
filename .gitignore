@@ -64,3 +64,6 @@ PythonWorks/__pycache__/__init__.cpython-312.pyc
 
 # ---- 参考論文PDF（著作権のため公開しない） ----
 rocket/docs/papers/
+
+# ---- 元データ（土壌水分の元Excelと派生CSV・作成スクリプト） ----
+rocket/大豆元データ/
